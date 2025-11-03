@@ -24,22 +24,62 @@ The repository consists of several interconnected modules:
 
 ## Requirements
 
-- Python 3.9 with latest setuptools
+- Python 3.9.10 or higher
 - Node.js (for poly_merger)
 - Google Sheets API credentials
 - Polymarket account and API credentials
 
 ## Installation
 
-1. **Clone the repository**:
+This project uses UV for fast, reliable package management.
+
+### Install UV
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Or with pip
+pip install uv
 ```
+
+### Install Dependencies
+
+```bash
+# Install all dependencies
+uv sync
+
+# Install with development dependencies (black, pytest)
+uv sync --extra dev
+```
+
+### Quick Start
+
+```bash
+# Run the market maker (recommended)
+uv run python main.py
+
+# Update market data
+uv run python update_markets.py
+
+# Update statistics
+uv run python update_stats.py
+```
+
+### Setup Steps
+
+1. **Clone the repository**:
+```bash
 git clone https://github.com/yourusername/poly-maker.git
 cd poly-maker
 ```
 
 2. **Install Python dependencies**:
-```
-pip install -r requirements.txt
+```bash
+uv sync
 ```
 
 3. **Install Node.js dependencies for the merger**:
@@ -67,14 +107,14 @@ Make sure your wallet has done at least one trade thru the UI so that the permis
    - Update `SPREADSHEET_URL` in your `.env` file
 
 7. **Update market data**:
-   - Run `python update_markets.py` to fetch all available markets
+   - Run `uv run python update_markets.py` to fetch all available markets
    - This should run continuously in the background (preferably on a different IP than your trading bot)
    - Add markets you want to trade to the "Selected Markets" sheet. You'd wanna select markets from the "Volatility Markets" sheet.
    - Configure corresponding parameters in the "Hyperparameters" sheet. Default parameters that worked well in November are there.
 
 8. **Start the market making bot**:
-```
-python main.py
+```bash
+uv run python main.py
 ```
 
 ## Configuration
