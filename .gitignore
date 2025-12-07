@@ -5,6 +5,7 @@ credentials.json
 .env
 .env.*
 positions/
+CRON_INSTRUCTIONS
 
 # VPN config (generated, contains sensitive data)
 vpn/*.ovpn
