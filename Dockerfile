@@ -18,9 +18,12 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Stage 2: Runtime stage
 FROM python:3.9-slim AS runtime
 
-# Install curl for health checks
+# Install curl for health checks and Node.js for poly_merger
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
@@ -33,6 +36,9 @@ COPY --from=builder /app/.venv /app/.venv
 
 # Copy application code
 COPY --chown=polybot:polybot . .
+
+# Install poly_merger Node.js dependencies
+RUN cd poly_merger && npm ci --production && cd ..
 
 # Create data directories
 RUN mkdir -p /app/data /app/positions && \
