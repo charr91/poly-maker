@@ -1,5 +1,9 @@
 from dotenv import load_dotenv          # Environment variable management
 import os                           # Operating system interface
+import asyncio                      # Async support
+import atexit                       # Cleanup handlers
+from concurrent.futures import ThreadPoolExecutor
+import functools                    # For partial function binding
 
 # Polymarket API client libraries
 from py_clob_client.client import ClobClient
@@ -31,6 +35,19 @@ from poly_data.abis import NegRiskAdapterABI, ConditionalTokenABI, erc20_abi
 
 # Load environment variables
 load_dotenv()
+
+# Thread pool for blocking API calls - prevents event loop starvation
+# Configurable via API_THREAD_POOL_SIZE env var (default: 10)
+_api_executor = ThreadPoolExecutor(
+    max_workers=int(os.getenv('API_THREAD_POOL_SIZE', '10')),
+    thread_name_prefix='polymarket_api'
+)
+
+
+@atexit.register
+def _shutdown_api_executor():
+    """Ensure clean shutdown of the thread pool."""
+    _api_executor.shutdown(wait=True)
 
 
 class PolymarketClient:
@@ -426,8 +443,123 @@ class PolymarketClient:
         if result.returncode != 0:
             print("Error:", result.stderr)
             raise Exception(f"Error in merging positions: {result.stderr}")
-        
+
         print("Done merging")
 
         # Return the transaction hash or output
         return result.stdout
+
+    # =========================================================================
+    # Async Wrappers - Run blocking sync methods in thread pool
+    # =========================================================================
+    # These methods prevent event loop starvation when scaling to 100+ markets.
+    # Use these in async code instead of the sync versions above.
+
+    async def create_order_async(self, marketId, action, price, size, neg_risk=False):
+        """
+        Async wrapper for create_order - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            functools.partial(self.create_order, marketId, action, price, size, neg_risk)
+        )
+
+    async def get_order_book_async(self, market):
+        """
+        Async wrapper for get_order_book - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            functools.partial(self.get_order_book, market)
+        )
+
+    async def get_all_orders_async(self):
+        """
+        Async wrapper for get_all_orders - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            self.get_all_orders
+        )
+
+    async def get_all_positions_async(self):
+        """
+        Async wrapper for get_all_positions - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            self.get_all_positions
+        )
+
+    async def get_position_async(self, tokenId):
+        """
+        Async wrapper for get_position - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            functools.partial(self.get_position, tokenId)
+        )
+
+    async def get_raw_position_async(self, tokenId):
+        """
+        Async wrapper for get_raw_position - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            functools.partial(self.get_raw_position, tokenId)
+        )
+
+    async def cancel_all_asset_async(self, asset_id):
+        """
+        Async wrapper for cancel_all_asset - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            functools.partial(self.cancel_all_asset, asset_id)
+        )
+
+    async def cancel_all_market_async(self, marketId):
+        """
+        Async wrapper for cancel_all_market - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            functools.partial(self.cancel_all_market, marketId)
+        )
+
+    async def merge_positions_async(self, amount_to_merge, condition_id, is_neg_risk_market):
+        """
+        Async wrapper for merge_positions - runs in thread pool.
+
+        Critical: merge_positions blocks for 1-30 seconds (subprocess call).
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor,
+            functools.partial(self.merge_positions, amount_to_merge, condition_id, is_neg_risk_market)
+        )

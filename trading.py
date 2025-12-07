@@ -30,15 +30,15 @@ def _get_trade_semaphore() -> asyncio.Semaphore:
         _trade_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRADES)
     return _trade_semaphore
 
-def send_buy_order(order):
+async def send_buy_order(order):
     """
     Create a BUY order for a specific token.
-    
+
     This function:
     1. Cancels any existing orders for the token
     2. Checks if the order price is within acceptable range
     3. Creates a new buy order if conditions are met
-    
+
     Args:
         order (dict): Order details including token, price, size, and market parameters
     """
@@ -47,20 +47,20 @@ def send_buy_order(order):
     # Only cancel existing orders if we need to make significant changes
     existing_buy_size = order['orders']['buy']['size']
     existing_buy_price = order['orders']['buy']['price']
-    
+
     # Cancel orders if price changed significantly or size needs major adjustment
     price_diff = abs(existing_buy_price - order['price']) if existing_buy_price > 0 else float('inf')
     size_diff = abs(existing_buy_size - order['size']) if existing_buy_size > 0 else float('inf')
-    
+
     should_cancel = (
         price_diff > 0.005 or  # Cancel if price diff > 0.5 cents
         size_diff > order['size'] * 0.1 or  # Cancel if size diff > 10%
         existing_buy_size == 0  # Cancel if no existing buy order
     )
-    
+
     if should_cancel and (existing_buy_size > 0 or order['orders']['sell']['size'] > 0):
         print(f"Cancelling buy orders - price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
-        client.cancel_all_asset(order['token'])  # Rate limiting handled in polymarket_client
+        await client.cancel_all_asset_async(order['token'])
     elif not should_cancel:
         print(f"Keeping existing buy orders - minor changes: price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
         return  # Don't place new order if existing one is fine
@@ -79,7 +79,7 @@ def send_buy_order(order):
         if order['price'] >= 0.1 and order['price'] < 0.9:
             print(f'Creating new order for {order["size"]} at {order["price"]}')
             print(order['token'], 'BUY', order['price'], order['size'])
-            client.create_order(  # Rate limiting handled in polymarket_client
+            await client.create_order_async(
                 order['token'],
                 'BUY',
                 order['price'],
@@ -92,14 +92,14 @@ def send_buy_order(order):
         print(f'Not creating new order because order price of {order["price"]} is less than incentive start price of {incentive_start}. Mid price is {order["mid_price"]}')
 
 
-def send_sell_order(order):
+async def send_sell_order(order):
     """
     Create a SELL order for a specific token.
-    
+
     This function:
     1. Cancels any existing orders for the token
     2. Creates a new sell order with the specified parameters
-    
+
     Args:
         order (dict): Order details including token, price, size, and market parameters
     """
@@ -108,26 +108,26 @@ def send_sell_order(order):
     # Only cancel existing orders if we need to make significant changes
     existing_sell_size = order['orders']['sell']['size']
     existing_sell_price = order['orders']['sell']['price']
-    
+
     # Cancel orders if price changed significantly or size needs major adjustment
     price_diff = abs(existing_sell_price - order['price']) if existing_sell_price > 0 else float('inf')
     size_diff = abs(existing_sell_size - order['size']) if existing_sell_size > 0 else float('inf')
-    
+
     should_cancel = (
         price_diff > 0.005 or  # Cancel if price diff > 0.5 cents
         size_diff > order['size'] * 0.1 or  # Cancel if size diff > 10%
         existing_sell_size == 0  # Cancel if no existing sell order
     )
-    
+
     if should_cancel and (existing_sell_size > 0 or order['orders']['buy']['size'] > 0):
         print(f"Cancelling sell orders - price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
-        client.cancel_all_asset(order['token'])  # Rate limiting handled in polymarket_client
+        await client.cancel_all_asset_async(order['token'])
     elif not should_cancel:
         print(f"Keeping existing sell orders - minor changes: price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
         return  # Don't place new order if existing one is fine
 
     print(f'Creating new order for {order["size"]} at {order["price"]}')
-    client.create_order(  # Rate limiting handled in polymarket_client
+    await client.create_order_async(
         order['token'],
         'SELL',
         order['price'],
@@ -187,16 +187,15 @@ async def perform_trade(market):
                 # Only merge if positions are above minimum threshold
                 if float(amount_to_merge) > CONSTANTS.MIN_MERGE_SIZE:
                     # Get exact position sizes from blockchain for merging
-                    # Rate limiting handled in polymarket_client
-                    pos_1 = client.get_position(row['token1'])[0]
-                    pos_2 = client.get_position(row['token2'])[0]
+                    pos_1 = (await client.get_position_async(row['token1']))[0]
+                    pos_2 = (await client.get_position_async(row['token2']))[0]
                     amount_to_merge = min(pos_1, pos_2)
                     scaled_amt = amount_to_merge / 10**6
 
                     if scaled_amt > CONSTANTS.MIN_MERGE_SIZE:
                         print(f"Position 1 is of size {pos_1} and Position 2 is of size {pos_2}. Merging positions")
-                        # Execute the merge operation (rate limiting handled in polymarket_client)
-                        client.merge_positions(amount_to_merge, market, row['neg_risk'] == 'TRUE')
+                        # Execute the merge operation
+                        await client.merge_positions_async(amount_to_merge, market, row['neg_risk'] == 'TRUE')
                         # Update our local position tracking
                         set_position(row['token1'], 'SELL', scaled_amt, 0, 'merge')
                         set_position(row['token2'], 'SELL', scaled_amt, 0, 'merge')
@@ -352,8 +351,8 @@ async def perform_trade(market):
                                                             pd.Timedelta(hours=params['sleep_period']))
 
                             print("Risking off")
-                            send_sell_order(order)
-                            client.cancel_all_market(market)  # Rate limiting handled in polymarket_client
+                            await send_sell_order(order)
+                            await client.cancel_all_market_async(market)
 
                             # Save risk details to file
                             open(fname, 'w').write(json.dumps(risk_details))
@@ -404,7 +403,7 @@ async def perform_trade(market):
                                 print(f'3 Hour Volatility of {row["3_hour"]} is greater than max volatility of '
                                       f'{params["volatility_threshold"]} or price of {order["price"]} is outside '
                                       f'0.05 of {sheet_value}. Cancelling all orders')
-                                client.cancel_all_asset(order['token'])  # Rate limiting handled in polymarket_client
+                                await client.cancel_all_asset_async(order['token'])
                             else:
                                 # Check for reverse position (holding opposite outcome)
                                 rev_token = global_state.REVERSE_TOKENS[str(token)]
@@ -415,7 +414,7 @@ async def perform_trade(market):
                                     print("Bypassing creation of new buy order because there is a reverse position")
                                     if orders['buy']['size'] > CONSTANTS.MIN_MERGE_SIZE:
                                         print("Cancelling buy orders because there is a reverse position")
-                                        client.cancel_all_asset(order['token'])  # Rate limiting handled in polymarket_client
+                                        await client.cancel_all_asset_async(order['token'])
 
                                     continue
 
@@ -423,22 +422,22 @@ async def perform_trade(market):
                                 if overall_ratio < 0:
                                     send_buy = False
                                     print(f"Not sending a buy order because overall ratio is {overall_ratio}")
-                                    client.cancel_all_asset(order['token'])  # Rate limiting handled in polymarket_client
+                                    await client.cancel_all_asset_async(order['token'])
                                 else:
                                     # Place new buy order if any of these conditions are met:
                                     # 1. We can get a better price than current order
                                     if best_bid > orders['buy']['price']:
                                         print(f"Sending Buy Order for {token} because better price. "
                                               f"Orders look like this: {orders['buy']}. Best Bid: {best_bid}")
-                                        send_buy_order(order)
+                                        await send_buy_order(order)
                                     # 2. Current position + orders is not enough to reach max_size
                                     elif position + orders['buy']['size'] < 0.95 * max_size:
                                         print(f"Sending Buy Order for {token} because not enough position + size")
-                                        send_buy_order(order)
+                                        await send_buy_order(order)
                                     # 3. Our current order is too large and needs to be resized
                                     elif orders['buy']['size'] > order['size'] * 1.01:
                                         print(f"Resending buy orders because open orders are too large")
-                                        send_buy_order(order)
+                                        await send_buy_order(order)
 
                     # ------- TAKE PROFIT / SELL ORDER MANAGEMENT -------
                     elif sell_amount > 0:
@@ -459,12 +458,12 @@ async def perform_trade(market):
                         if diff > 2:
                             print(f"Sending Sell Order for {token} because better current order price of "
                                   f"{order_price} is deviant from the tp_price of {tp_price} and diff is {diff}")
-                            send_sell_order(order)
+                            await send_sell_order(order)
                         # 2. Current order size is too small for our position
                         elif orders['sell']['size'] < position * 0.97:
                             print(f"Sending Sell Order for {token} because not enough sell size. "
                                   f"Position: {position}, Sell Size: {orders['sell']['size']}")
-                            send_sell_order(order)
+                            await send_sell_order(order)
 
             except Exception as ex:
                 print(f"Error performing trade for {market}: {ex}")
