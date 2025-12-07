@@ -1,8 +1,9 @@
-import gc                      # Garbage collection
-import time                    # Time functions
-import asyncio                 # Asynchronous I/O
-import traceback               # Exception handling
-import threading               # Thread management
+import gc  # Garbage collection
+import os  # Environment variables
+import time  # Time functions
+import asyncio  # Asynchronous I/O
+import logging  # Logging
+import threading  # Thread management
 
 from poly_data.polymarket_client import PolymarketClient
 from poly_data.data_utils import update_markets, update_positions, update_orders
@@ -13,13 +14,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Configure logging - level controllable via LOG_LEVEL env var (default: INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("poly_maker")
+
+
 def update_once():
     """
     Initialize the application state by fetching market data, positions, and orders.
     """
-    update_markets()    # Get market information from Google Sheets
+    update_markets()  # Get market information from Google Sheets
     update_positions()  # Get current positions from Polymarket
-    update_orders()     # Get current orders from Polymarket
+    update_orders()  # Get current orders from Polymarket
+
 
 def remove_from_pending():
     """
@@ -28,23 +40,29 @@ def remove_from_pending():
     """
     try:
         current_time = time.time()
-            
+
         # Iterate through all performing trades
         for col in list(global_state.performing.keys()):
             for trade_id in list(global_state.performing[col]):
-                
+
                 try:
                     # If trade has been pending for more than 15 seconds, remove it
-                    if current_time - global_state.performing_timestamps[col].get(trade_id, current_time) > 15:
-                        print(f"Removing stale entry {trade_id} from {col} after 15 seconds")
+                    if (
+                        current_time
+                        - global_state.performing_timestamps[col].get(trade_id, current_time)
+                        > 15
+                    ):
+                        logger.warning(
+                            "Removing stale trade %s from %s after 15s timeout", trade_id, col[:30]
+                        )
                         remove_from_performing(col, trade_id)
-                        print("After removing: ", global_state.performing, global_state.performing_timestamps)
-                except:
-                    print("Error in remove_from_pending")
-                    print(traceback.format_exc())                
-    except:
-        print("Error in remove_from_pending")
-        print(traceback.format_exc())
+                except Exception as e:
+                    logger.error("Error removing stale trade: %s", e)
+                    logger.debug("Full traceback:", exc_info=True)
+    except Exception as e:
+        logger.error("Error in remove_from_pending: %s", e)
+        logger.debug("Full traceback:", exc_info=True)
+
 
 def update_periodically():
     """
@@ -56,11 +74,11 @@ def update_periodically():
     i = 1
     while True:
         time.sleep(5)  # Update every 5 seconds
-        
+
         try:
             # Clean up stale trades
             remove_from_pending()
-            
+
             # Update positions and orders every cycle
             update_positions(avgOnly=True)  # Only update average price, not position size
             update_orders()
@@ -69,47 +87,54 @@ def update_periodically():
             if i % 6 == 0:
                 update_markets()
                 i = 1
-                    
+
             gc.collect()  # Force garbage collection to free memory
             i += 1
-        except:
-            print("Error in update_periodically")
-            print(traceback.format_exc())
-            
+        except Exception as e:
+            logger.error("Error in update_periodically: %s", e)
+            logger.debug("Full traceback:", exc_info=True)
+
+
 async def main():
     """
     Main application entry point. Initializes client, data, and manages websocket connections.
     """
     # Initialize client
     global_state.client = PolymarketClient()
-    
+
     # Initialize state and fetch initial data
     global_state.all_tokens = []
     update_once()
-    print("After initial updates: ", global_state.orders, global_state.positions)
 
-    print("\n")
-    print(f'There are {len(global_state.df)} market, {len(global_state.positions)} positions and {len(global_state.orders)} orders. Starting positions: {global_state.positions}')
+    logger.debug("Initial orders: %s", global_state.orders)
+    logger.debug("Initial positions: %s", global_state.positions)
+
+    logger.info(
+        "Started with %d markets, %d positions, %d orders",
+        len(global_state.df),
+        len(global_state.positions),
+        len(global_state.orders),
+    )
 
     # Start background update thread
     update_thread = threading.Thread(target=update_periodically, daemon=True)
     update_thread.start()
-    
+
     # Main loop - maintain websocket connections
     while True:
         try:
             # Connect to market and user websockets simultaneously
             await asyncio.gather(
-                connect_market_websocket(global_state.all_tokens), 
-                connect_user_websocket()
+                connect_market_websocket(global_state.all_tokens), connect_user_websocket()
             )
-            print("Reconnecting to the websocket")
-        except:
-            print("Error in main loop")
-            print(traceback.format_exc())
-            
+            logger.info("Reconnecting to websocket...")
+        except Exception as e:
+            logger.error("Error in main loop: %s", e)
+            logger.debug("Full traceback:", exc_info=True)
+
         await asyncio.sleep(1)
         gc.collect()  # Clean up memory
+
 
 if __name__ == "__main__":
     asyncio.run(main())

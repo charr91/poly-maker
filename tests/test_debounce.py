@@ -8,12 +8,20 @@ Tests verify that:
 """
 
 import asyncio
+import sys
 import time
 from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
 # We need to mock the trading module before importing data_processing
 # to avoid import errors from missing dependencies
+
+
+def _clear_module_cache():
+    """Clear data_processing module from cache to ensure fresh import."""
+    modules_to_clear = [key for key in list(sys.modules.keys()) if "data_processing" in key]
+    for module in modules_to_clear:
+        del sys.modules[module]
 
 
 class TestDebounceLogic:
@@ -28,14 +36,24 @@ class TestDebounceLogic:
         # Mock global_state to avoid import issues
         self.mock_global_state = MagicMock()
 
-        with patch.dict('sys.modules', {
-            'trading': MagicMock(perform_trade=self.mock_perform_trade),
-            'poly_data.global_state': self.mock_global_state,
-            'poly_data.CONSTANTS': MagicMock(),
-            'poly_data.data_utils': MagicMock(),
-        }):
+        # Clear any previously cached version of data_processing
+        _clear_module_cache()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "trading": MagicMock(perform_trade=self.mock_perform_trade),
+                "poly_data.global_state": self.mock_global_state,
+                "poly_data.CONSTANTS": MagicMock(),
+                "poly_data.data_utils": MagicMock(),
+            },
+        ):
+            # Clear again inside the patch context to ensure fresh import
+            _clear_module_cache()
+
             # Now import the module with mocks in place
             from poly_data import data_processing
+
             self.data_processing = data_processing
 
             # Clear any existing state
@@ -46,6 +64,9 @@ class TestDebounceLogic:
             data_processing.perform_trade = self.mock_perform_trade
 
             yield
+
+        # Clear module cache after test
+        _clear_module_cache()
 
     @pytest.mark.asyncio
     async def test_single_trade_executes_after_debounce(self):
@@ -236,18 +257,31 @@ class TestDebounceEdgeCases:
         self.mock_perform_trade = AsyncMock()
         self.mock_global_state = MagicMock()
 
-        with patch.dict('sys.modules', {
-            'trading': MagicMock(perform_trade=self.mock_perform_trade),
-            'poly_data.global_state': self.mock_global_state,
-            'poly_data.CONSTANTS': MagicMock(),
-            'poly_data.data_utils': MagicMock(),
-        }):
+        # Clear any previously cached version of data_processing
+        _clear_module_cache()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "trading": MagicMock(perform_trade=self.mock_perform_trade),
+                "poly_data.global_state": self.mock_global_state,
+                "poly_data.CONSTANTS": MagicMock(),
+                "poly_data.data_utils": MagicMock(),
+            },
+        ):
+            # Clear again inside the patch context to ensure fresh import
+            _clear_module_cache()
+
             from poly_data import data_processing
+
             self.data_processing = data_processing
             data_processing._pending_trades.clear()
             data_processing._pending_trade_tasks.clear()
             data_processing.perform_trade = self.mock_perform_trade
             yield
+
+        # Clear module cache after test
+        _clear_module_cache()
 
     @pytest.mark.asyncio
     async def test_schedule_after_completion(self):
