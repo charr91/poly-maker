@@ -12,13 +12,23 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Detect docker compose command (v2 plugin vs v1 standalone)
+if docker compose version &>/dev/null; then
+    DC="docker compose"
+elif command -v docker-compose &>/dev/null; then
+    DC="docker-compose"
+else
+    echo -e "${RED}Error: Neither 'docker compose' nor 'docker-compose' found${NC}"
+    exit 1
+fi
+
 # Track which mode is running
 get_running_mode() {
-    if docker-compose ps --quiet polybot 2>/dev/null | grep -q .; then
+    if $DC ps --quiet polybot 2>/dev/null | grep -q .; then
         echo "vpn"
-    elif docker-compose -f docker-compose.novpn.yml ps --quiet polybot 2>/dev/null | grep -q .; then
+    elif $DC -f docker-compose.novpn.yml ps --quiet polybot 2>/dev/null | grep -q .; then
         echo "novpn"
-    elif docker-compose -f docker-compose.pia.yml ps --quiet polybot 2>/dev/null | grep -q .; then
+    elif $DC -f docker-compose.pia.yml ps --quiet polybot 2>/dev/null | grep -q .; then
         echo "pia"
     else
         echo "none"
@@ -27,9 +37,9 @@ get_running_mode() {
 
 # Stop all modes
 stop_all() {
-    docker-compose down 2>/dev/null || true
-    docker-compose -f docker-compose.novpn.yml down 2>/dev/null || true
-    docker-compose -f docker-compose.pia.yml down 2>/dev/null || true
+    $DC down 2>/dev/null || true
+    $DC -f docker-compose.novpn.yml down 2>/dev/null || true
+    $DC -f docker-compose.pia.yml down 2>/dev/null || true
 }
 
 # Get compose file for mode
@@ -89,7 +99,7 @@ case "$1" in
 
         echo -e "${GREEN}Starting bot in $MODE mode...${NC}"
         stop_all
-        docker-compose -f "$COMPOSE_FILE" up -d
+        $DC -f "$COMPOSE_FILE" up -d
 
         echo ""
         echo -e "${GREEN}Bot started!${NC}"
@@ -98,7 +108,7 @@ case "$1" in
         # Show IP for VPN modes
         if [ "$MODE" != "novpn" ]; then
             echo -n "Public IP: "
-            docker-compose -f "$COMPOSE_FILE" exec -T polybot curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "(waiting for VPN...)"
+            $DC -f "$COMPOSE_FILE" exec -T polybot curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "(waiting for VPN...)"
         fi
         ;;
 
@@ -116,7 +126,7 @@ case "$1" in
         fi
         COMPOSE_FILE=$(get_compose_file "$MODE")
         echo "Restarting bot in $MODE mode..."
-        docker-compose -f "$COMPOSE_FILE" restart
+        $DC -f "$COMPOSE_FILE" restart
         echo -e "${GREEN}Bot restarted.${NC}"
         ;;
 
@@ -129,10 +139,10 @@ case "$1" in
             echo "Bot is not running."
         else
             COMPOSE_FILE=$(get_compose_file "$MODE")
-            docker-compose -f "$COMPOSE_FILE" ps
+            $DC -f "$COMPOSE_FILE" ps
             echo ""
             echo -n "Public IP: "
-            docker-compose -f "$COMPOSE_FILE" exec -T polybot curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unavailable"
+            $DC -f "$COMPOSE_FILE" exec -T polybot curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unavailable"
         fi
         ;;
 
@@ -144,7 +154,7 @@ case "$1" in
         fi
         COMPOSE_FILE=$(get_compose_file "$MODE")
         SERVICE="${2:-}"
-        docker-compose -f "$COMPOSE_FILE" logs -f $SERVICE
+        $DC -f "$COMPOSE_FILE" logs -f $SERVICE
         ;;
 
     ip)
@@ -154,7 +164,7 @@ case "$1" in
             exit 1
         fi
         COMPOSE_FILE=$(get_compose_file "$MODE")
-        docker-compose -f "$COMPOSE_FILE" exec -T polybot curl -s https://api.ipify.org
+        $DC -f "$COMPOSE_FILE" exec -T polybot curl -s https://api.ipify.org
         echo ""
         ;;
 
@@ -168,7 +178,7 @@ case "$1" in
                 if [ "$MODE" = "vpn" ]; then
                     echo ""
                     echo "Restarting VPN with new config..."
-                    docker-compose restart vpn
+                    $DC restart vpn
                 fi
                 ;;
             region)
@@ -203,7 +213,7 @@ case "$1" in
 
     build)
         echo "Rebuilding bot image..."
-        docker-compose build --no-cache
+        $DC build --no-cache
         echo -e "${GREEN}Build complete.${NC}"
         ;;
 
