@@ -1,4 +1,4 @@
-# Poly-Maker Run Guide
+# Poly-Maker Usage Guide
 
 Run the bot with optional VPN routing through PIA.
 
