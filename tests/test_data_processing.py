@@ -167,7 +167,16 @@ class TestProcessUserDataInputHandling:
 
         self.mock_set_position = MagicMock()
         self.mock_set_order = MagicMock()
-        self.mock_create_task = MagicMock()
+        self.created_tasks = []
+
+        def mock_create_task(coro):
+            """Mock that closes coroutines to prevent 'never awaited' warning."""
+            task = MagicMock()
+            coro.close()
+            self.created_tasks.append(task)
+            return task
+
+        self.mock_create_task = mock_create_task
 
         with patch.dict(
             "sys.modules",

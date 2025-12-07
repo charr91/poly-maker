@@ -73,7 +73,7 @@ class TestDebounceLogic:
         """Test that a single scheduled trade executes after the debounce period."""
         # Set a short debounce for testing
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.05  # 50ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.01  # 10ms
 
         try:
             market = "test_market_1"
@@ -85,7 +85,7 @@ class TestDebounceLogic:
             assert self.mock_perform_trade.call_count == 0
 
             # Wait for debounce period + buffer
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.03)
 
             # Trade should have executed
             assert self.mock_perform_trade.call_count == 1
@@ -98,7 +98,7 @@ class TestDebounceLogic:
     async def test_rapid_updates_extend_debounce(self):
         """Test that rapid updates extend the debounce period and only execute once."""
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.1  # 100ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.02  # 20ms
 
         try:
             market = "test_market_2"
@@ -106,8 +106,8 @@ class TestDebounceLogic:
             # Schedule initial trade
             self.data_processing.schedule_trade(market)
 
-            # Wait 50ms (half of debounce)
-            await asyncio.sleep(0.05)
+            # Wait 10ms (half of debounce)
+            await asyncio.sleep(0.01)
 
             # Trade should not have executed yet
             assert self.mock_perform_trade.call_count == 0
@@ -115,14 +115,14 @@ class TestDebounceLogic:
             # Schedule another trade (should cancel first and restart timer)
             self.data_processing.schedule_trade(market)
 
-            # Wait another 50ms (still within new debounce period)
-            await asyncio.sleep(0.05)
+            # Wait another 10ms (still within new debounce period)
+            await asyncio.sleep(0.01)
 
             # Trade should still not have executed
             assert self.mock_perform_trade.call_count == 0
 
             # Wait for the full debounce period to complete
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.03)
 
             # Now trade should have executed exactly once
             assert self.mock_perform_trade.call_count == 1
@@ -135,7 +135,7 @@ class TestDebounceLogic:
     async def test_trade_not_dropped_on_reschedule(self):
         """Test that rescheduling doesn't drop trades - they always execute."""
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.05  # 50ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.01  # 10ms
 
         try:
             market = "test_market_3"
@@ -143,10 +143,10 @@ class TestDebounceLogic:
             # Schedule multiple trades rapidly
             for _ in range(5):
                 self.data_processing.schedule_trade(market)
-                await asyncio.sleep(0.01)  # 10ms between each
+                await asyncio.sleep(0.002)  # 2ms between each
 
             # Wait for debounce to complete
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.03)
 
             # Trade should have executed exactly once (not dropped, not multiple)
             assert self.mock_perform_trade.call_count == 1
@@ -159,7 +159,7 @@ class TestDebounceLogic:
     async def test_different_markets_debounce_independently(self):
         """Test that different markets have independent debounce timers."""
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.05  # 50ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.01  # 10ms
 
         try:
             market_a = "market_a"
@@ -170,7 +170,7 @@ class TestDebounceLogic:
             self.data_processing.schedule_trade(market_b)
 
             # Wait for debounce
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.03)
 
             # Both trades should have executed
             assert self.mock_perform_trade.call_count == 2
@@ -187,7 +187,7 @@ class TestDebounceLogic:
     async def test_cancelled_task_does_not_execute(self):
         """Test that when a task is cancelled, a new one runs instead."""
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.1  # 100ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.02  # 20ms
 
         try:
             market = "test_market_cancel"
@@ -197,7 +197,7 @@ class TestDebounceLogic:
             first_task = self.data_processing._pending_trade_tasks.get(market)
 
             # Wait a bit
-            await asyncio.sleep(0.02)
+            await asyncio.sleep(0.005)
 
             # Schedule second trade (should cancel first)
             self.data_processing.schedule_trade(market)
@@ -207,13 +207,13 @@ class TestDebounceLogic:
             assert second_task is not first_task
 
             # Give time for cancellation to process
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.005)
 
             # First task should be cancelled or done (cancelled raises CancelledError which marks it done)
             assert first_task.cancelled() or first_task.done()
 
             # Wait for second task to complete
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.03)
 
             # Only one trade should have executed
             assert self.mock_perform_trade.call_count == 1
@@ -225,7 +225,7 @@ class TestDebounceLogic:
     async def test_pending_state_cleared_after_execution(self):
         """Test that pending state is properly cleared after trade execution."""
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.05  # 50ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.01  # 10ms
 
         try:
             market = "test_market_cleanup"
@@ -238,7 +238,7 @@ class TestDebounceLogic:
             assert market in self.data_processing._pending_trade_tasks
 
             # Wait for execution
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.03)
 
             # Pending state should be cleared
             assert market not in self.data_processing._pending_trades
@@ -287,7 +287,7 @@ class TestDebounceEdgeCases:
     async def test_schedule_after_completion(self):
         """Test that scheduling after a trade completes works correctly."""
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.03  # 30ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.01  # 10ms
 
         try:
             market = "test_market_after"
@@ -296,7 +296,7 @@ class TestDebounceEdgeCases:
             self.data_processing.schedule_trade(market)
 
             # Wait for it to complete
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.02)
 
             assert self.mock_perform_trade.call_count == 1
 
@@ -304,7 +304,7 @@ class TestDebounceEdgeCases:
             self.data_processing.schedule_trade(market)
 
             # Wait for it to complete
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.02)
 
             # Both trades should have executed
             assert self.mock_perform_trade.call_count == 2
@@ -316,7 +316,7 @@ class TestDebounceEdgeCases:
     async def test_high_frequency_updates(self):
         """Test behavior under high-frequency updates."""
         original_debounce = self.data_processing.TRADE_DEBOUNCE_SEC
-        self.data_processing.TRADE_DEBOUNCE_SEC = 0.05  # 50ms
+        self.data_processing.TRADE_DEBOUNCE_SEC = 0.01  # 10ms
 
         try:
             market = "test_high_freq"
@@ -324,10 +324,10 @@ class TestDebounceEdgeCases:
             # Send many rapid updates
             for _ in range(20):
                 self.data_processing.schedule_trade(market)
-                await asyncio.sleep(0.005)  # 5ms between each
+                await asyncio.sleep(0.001)  # 1ms between each
 
             # Wait for debounce to complete
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.03)
 
             # Should have executed exactly once
             assert self.mock_perform_trade.call_count == 1

@@ -572,7 +572,7 @@ class TestTradeSemaphore:
             async with semaphore:
                 active_count += 1
                 max_active = max(max_active, active_count)
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.01)
                 active_count -= 1
 
         await asyncio.gather(*[mock_trade() for _ in range(5)])

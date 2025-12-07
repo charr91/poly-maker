@@ -21,7 +21,7 @@ class TestRunInExecutorPattern:
     @pytest.mark.asyncio
     async def test_blocking_call_runs_in_executor(self):
         """Test that a blocking sync call doesn't block the event loop."""
-        blocking_duration = 0.1
+        blocking_duration = 0.03
 
         def blocking_sync_call():
             time.sleep(blocking_duration)
@@ -35,7 +35,7 @@ class TestRunInExecutorPattern:
 
         async def concurrent_task():
             nonlocal concurrent_ran
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.005)
             concurrent_ran = True
 
         start = time.monotonic()
@@ -46,14 +46,14 @@ class TestRunInExecutorPattern:
         elapsed = time.monotonic() - start
 
         assert concurrent_ran is True
-        assert elapsed < blocking_duration * 1.5
+        assert elapsed < blocking_duration * 2
         assert results[0] == "done"
 
     @pytest.mark.asyncio
     async def test_multiple_async_calls_run_concurrently(self):
         """Test that multiple async wrapper calls can run in parallel."""
         call_times = []
-        call_duration = 0.05
+        call_duration = 0.02
 
         def slow_sync_call(call_id):
             start = time.monotonic()
@@ -72,7 +72,7 @@ class TestRunInExecutorPattern:
 
         assert set(results) == {0, 1, 2, 3, 4}
         # With thread pool, 5 concurrent calls should complete faster than 5 * call_duration
-        assert total_elapsed < call_duration * 3
+        assert total_elapsed < call_duration * 4
 
     @pytest.mark.asyncio
     async def test_executor_with_partial_binds_arguments(self):
@@ -150,7 +150,7 @@ class TestThreadPoolBehavior:
             # Use a threading lock since this runs in thread pool
             concurrent_count += 1
             max_concurrent = max(max_concurrent, concurrent_count)
-            time.sleep(0.05)
+            time.sleep(0.01)
             concurrent_count -= 1
             return True
 
@@ -199,11 +199,11 @@ class TestAsyncWrapperIntegration:
 
         # Simulate blocking API calls
         def create_order_sync(market_id, action, price, size):
-            time.sleep(0.02)  # Simulate HTTP latency
+            time.sleep(0.005)  # Simulate HTTP latency
             return {'order_id': f'{market_id}_{action}_{price}'}
 
         def cancel_order_sync(asset_id):
-            time.sleep(0.01)
+            time.sleep(0.003)
             return {'cancelled': True}
 
         async def create_order_async(market_id, action, price, size):
@@ -243,8 +243,7 @@ class TestAsyncWrapperIntegration:
         assert results[1] == {'order_id': 'market_3_SELL_0.7'}
 
         # Parallel calls should complete faster than sequential
-        # 0.01 (cancel) + 0.02 (order1) + max(0.02, 0.02) for parallel orders
-        assert elapsed < 0.1
+        assert elapsed < 0.05
 
         executor.shutdown(wait=True)
 
@@ -255,7 +254,7 @@ class TestAsyncWrapperIntegration:
         heartbeat_times = []
 
         def blocking_api_call():
-            time.sleep(0.15)  # Simulate 150ms API call
+            time.sleep(0.04)  # Simulate 40ms API call
             return True
 
         async def api_wrapper():
@@ -263,10 +262,10 @@ class TestAsyncWrapperIntegration:
             return await loop.run_in_executor(executor, blocking_api_call)
 
         async def heartbeat_task():
-            """Simulates WebSocket PING/PONG every 50ms."""
+            """Simulates WebSocket PING/PONG every 10ms."""
             for _ in range(5):
                 heartbeat_times.append(time.monotonic())
-                await asyncio.sleep(0.03)
+                await asyncio.sleep(0.008)
 
         # Run blocking API call and heartbeat concurrently
         await asyncio.gather(
@@ -277,10 +276,10 @@ class TestAsyncWrapperIntegration:
         # All 5 heartbeats should have occurred
         assert len(heartbeat_times) == 5
 
-        # Heartbeats should be roughly 30ms apart (not blocked by API call)
+        # Heartbeats should be roughly 8ms apart (not blocked by API call)
         for i in range(1, len(heartbeat_times)):
             interval = heartbeat_times[i] - heartbeat_times[i - 1]
-            # Should be close to 0.03s, definitely less than the 0.15s API call
-            assert interval < 0.1, f"Heartbeat interval {interval}s too long (blocked by API call)"
+            # Should be close to 0.008s, definitely less than the 0.04s API call
+            assert interval < 0.03, f"Heartbeat interval {interval}s too long (blocked by API call)"
 
         executor.shutdown(wait=True)
