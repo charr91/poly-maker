@@ -1,12 +1,77 @@
+import os
 import json
+import time
+import asyncio
+import logging
+from typing import Dict
 from sortedcontainers import SortedDict
+
 import poly_data.global_state as global_state
 import poly_data.CONSTANTS as CONSTANTS
-
 from trading import perform_trade
-import time 
-import asyncio
 from poly_data.data_utils import set_position, set_order, update_positions
+
+
+# Configure logging
+logger = logging.getLogger('poly_maker.data_processing')
+
+# Debouncing configuration
+# Configurable via TRADE_DEBOUNCE_MS env var (default: 300ms)
+TRADE_DEBOUNCE_MS = int(os.getenv('TRADE_DEBOUNCE_MS', '300'))
+TRADE_DEBOUNCE_SEC = TRADE_DEBOUNCE_MS / 1000.0
+
+# Track pending trades per market for debouncing
+_pending_trades: Dict[str, float] = {}
+_pending_trade_tasks: Dict[str, asyncio.Task] = {}
+
+
+async def _debounced_perform_trade(market: str) -> None:
+    """
+    Execute perform_trade with debouncing to prevent flooding.
+
+    Waits for TRADE_DEBOUNCE_SEC before executing. If this task is cancelled
+    (because a newer trade was scheduled), it exits gracefully.
+    """
+    try:
+        # Wait for debounce period
+        await asyncio.sleep(TRADE_DEBOUNCE_SEC)
+
+        # Clear pending state and execute trade
+        _pending_trades.pop(market, None)
+        _pending_trade_tasks.pop(market, None)
+
+        logger.debug(f"Executing debounced trade for {market}")
+        await perform_trade(market)
+
+    except asyncio.CancelledError:
+        # Task was cancelled because a newer trade was scheduled
+        logger.debug(f"Debounced trade for {market} cancelled (superseded by newer request)")
+        raise  # Re-raise to properly handle cancellation
+
+
+def schedule_trade(market: str) -> None:
+    """
+    Schedule a debounced trade for a market.
+
+    If a trade is already pending for this market, cancels the pending task
+    and schedules a new one. This ensures:
+    1. Rapid updates extend the quiet period (debounce behavior)
+    2. A trade is always executed after the quiet period ends
+    """
+    now = time.time()
+
+    # Cancel any existing pending task for this market
+    existing_task = _pending_trade_tasks.get(market)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+        logger.debug(f"Cancelled pending trade for {market}, scheduling new one")
+
+    # Schedule new debounced trade
+    _pending_trades[market] = now
+    task = asyncio.create_task(_debounced_perform_trade(market))
+    _pending_trade_tasks[market] = task
+    logger.debug(f"Scheduled debounced trade for {market}")
+
 
 def process_book_data(asset, json_data):
     global_state.all_data[asset] = {
@@ -33,7 +98,13 @@ def process_price_change(asset, side, price_level, new_size):
         book[price_level] = new_size
 
 def process_data(json_datas, trade=True):
+    """
+    Process incoming WebSocket market data.
 
+    Uses debouncing to prevent flooding perform_trade calls when receiving
+    rapid price updates. Each market gets at most one trade execution per
+    TRADE_DEBOUNCE_MS period.
+    """
     for json_data in json_datas:
         event_type = json_data['event_type']
         asset = json_data['market']
@@ -42,8 +113,9 @@ def process_data(json_datas, trade=True):
             process_book_data(asset, json_data)
 
             if trade:
-                asyncio.create_task(perform_trade(asset))
-                
+                # Use debounced scheduling to prevent flooding
+                schedule_trade(asset)
+
         elif event_type == 'price_change':
             for data in json_data['price_changes']:
                 side = 'bids' if data['side'] == 'BUY' else 'asks'
@@ -51,11 +123,9 @@ def process_data(json_datas, trade=True):
                 new_size = float(data['size'])
                 process_price_change(asset, side, price_level, new_size)
 
-                if trade:
-                    asyncio.create_task(perform_trade(asset))
-        
-
-        # pretty_print(f'Received book update for {asset}:', global_state.all_data[asset])
+            # Only schedule one trade per price_change event (not per price level)
+            if trade:
+                schedule_trade(asset)
 
 def add_to_performing(col, id):
     if col not in global_state.performing:

@@ -19,7 +19,12 @@ import subprocess                   # For calling external processes
 from py_clob_client.clob_types import OpenOrderParams
 
 # Rate limiting utilities
-from poly_data.rate_limiter import with_retry, get_rate_limiter
+from poly_data.rate_limiter import (
+    with_retry,
+    get_rate_limiter,
+    get_rate_limit_manager,
+    EndpointType
+)
 
 # Smart contract ABIs
 from poly_data.abis import NegRiskAdapterABI, ConditionalTokenABI, erc20_abi
@@ -106,17 +111,20 @@ class PolymarketClient:
     def create_order(self, marketId, action, price, size, neg_risk=False):
         """
         Create and submit a new order to the Polymarket order book.
-        
+
         Args:
             marketId (str): ID of the market token to trade
             action (str): "BUY" or "SELL"
             price (float): Order price (0-1 range for prediction markets)
             size (float): Order size in USDC
             neg_risk (bool, optional): Whether this is a negative risk market. Defaults to False.
-            
+
         Returns:
             dict: Response from the API containing order details, or empty dict on error
         """
+        # Rate limit before making API call
+        get_rate_limit_manager().acquire_sync(EndpointType.ORDER)
+
         # Create order parameters
         order_args = OrderArgs(
             token_id=str(marketId),
@@ -132,27 +140,51 @@ class PolymarketClient:
             signed_order = self.client.create_order(order_args)
         else:
             signed_order = self.client.create_order(order_args, options=PartialCreateOrderOptions(neg_risk=True))
-            
+
         try:
             # Submit the signed order to the API
             resp = self.client.post_order(signed_order)
+            get_rate_limit_manager().on_response(200)
             return resp
+        except requests.exceptions.HTTPError as ex:
+            # Extract status code and report to circuit breaker
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            print(f"HTTP error {status_code}: {ex}")
+            return {}
         except Exception as ex:
-            print(ex)
+            # For non-HTTP exceptions, assume server error for circuit breaker
+            get_rate_limit_manager().on_response(500)
+            print(f"Error creating order: {ex}")
             return {}
 
     def get_order_book(self, market):
         """
         Get the current order book for a specific market.
-        
+
         Args:
             market (str): Market ID to query
-            
+
         Returns:
             tuple: (bids_df, asks_df) - DataFrames containing bid and ask orders
+
+        Raises:
+            Exception: If the API call fails after rate limit handling
         """
-        orderBook = self.client.get_order_book(market)
-        return pd.DataFrame(orderBook.bids).astype(float), pd.DataFrame(orderBook.asks).astype(float)
+        # Rate limit before making API call
+        get_rate_limit_manager().acquire_sync(EndpointType.BOOK)
+
+        try:
+            orderBook = self.client.get_order_book(market)
+            get_rate_limit_manager().on_response(200)
+            return pd.DataFrame(orderBook.bids).astype(float), pd.DataFrame(orderBook.asks).astype(float)
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            raise
+        except Exception as ex:
+            get_rate_limit_manager().on_response(500)
+            raise
 
 
     def get_usdc_balance(self):
@@ -164,10 +196,21 @@ class PolymarketClient:
         """
         return self.usdc_contract.functions.balanceOf(self.browser_wallet).call() / 10**6
      
-    @with_retry(max_retries=3, base_delay=1.0, rate_limiter=get_rate_limiter())
     def _fetch_pos_balance(self, url):
         """Internal method to fetch position balance with retry logic."""
-        return requests.get(url)
+        get_rate_limit_manager().acquire_sync(EndpointType.DATA_API)
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            get_rate_limit_manager().on_response(response.status_code)
+            return response
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            raise
+        except Exception as ex:
+            get_rate_limit_manager().on_response(500)
+            raise
 
     def get_pos_balance(self):
         """
@@ -188,10 +231,21 @@ class PolymarketClient:
         """
         return self.get_usdc_balance() + self.get_pos_balance()
 
-    @with_retry(max_retries=3, base_delay=1.0, rate_limiter=get_rate_limiter())
     def _fetch_all_positions(self, url):
         """Internal method to fetch all positions with retry logic."""
-        return requests.get(url)
+        get_rate_limit_manager().acquire_sync(EndpointType.DATA_API)
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            get_rate_limit_manager().on_response(response.status_code)
+            return response
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            raise
+        except Exception as ex:
+            get_rate_limit_manager().on_response(500)
+            raise
 
     def get_all_positions(self):
         """
@@ -238,60 +292,106 @@ class PolymarketClient:
     def get_all_orders(self):
         """
         Get all open orders for the connected wallet.
-        
+
         Returns:
             DataFrame: All open orders with their details
         """
-        orders_df = pd.DataFrame(self.client.get_orders())
+        # Rate limit before making API call
+        get_rate_limit_manager().acquire_sync(EndpointType.GENERAL)
 
-        # Convert numeric columns to float
-        for col in ['original_size', 'size_matched', 'price']:
-            if col in orders_df.columns:
-                orders_df[col] = orders_df[col].astype(float)
+        try:
+            orders_df = pd.DataFrame(self.client.get_orders())
+            get_rate_limit_manager().on_response(200)
 
-        return orders_df
+            # Convert numeric columns to float
+            for col in ['original_size', 'size_matched', 'price']:
+                if col in orders_df.columns:
+                    orders_df[col] = orders_df[col].astype(float)
+
+            return orders_df
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            raise
+        except Exception as ex:
+            get_rate_limit_manager().on_response(500)
+            raise
     
     def get_market_orders(self, market):
         """
         Get all open orders for a specific market.
-        
+
         Args:
             market (str): Market ID to query
-            
+
         Returns:
             DataFrame: Open orders for the specified market
         """
-        orders_df = pd.DataFrame(self.client.get_orders(OpenOrderParams(
-            market=market,
-        )))
+        # Rate limit before making API call
+        get_rate_limit_manager().acquire_sync(EndpointType.GENERAL)
 
-        # Convert numeric columns to float
-        for col in ['original_size', 'size_matched', 'price']:
-            if col in orders_df.columns:
-                orders_df[col] = orders_df[col].astype(float)
+        try:
+            orders_df = pd.DataFrame(self.client.get_orders(OpenOrderParams(
+                market=market,
+            )))
+            get_rate_limit_manager().on_response(200)
 
-        return orders_df
+            # Convert numeric columns to float
+            for col in ['original_size', 'size_matched', 'price']:
+                if col in orders_df.columns:
+                    orders_df[col] = orders_df[col].astype(float)
+
+            return orders_df
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            raise
+        except Exception as ex:
+            get_rate_limit_manager().on_response(500)
+            raise
     
 
     def cancel_all_asset(self, asset_id):
         """
         Cancel all orders for a specific asset token.
-        
+
         Args:
             asset_id (str): Asset token ID
         """
-        self.client.cancel_market_orders(asset_id=str(asset_id))
+        # Rate limit before making API call
+        get_rate_limit_manager().acquire_sync(EndpointType.CANCEL_ALL)
 
+        try:
+            self.client.cancel_market_orders(asset_id=str(asset_id))
+            get_rate_limit_manager().on_response(200)
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            raise
+        except Exception as ex:
+            get_rate_limit_manager().on_response(500)
+            raise
 
-    
     def cancel_all_market(self, marketId):
         """
         Cancel all orders in a specific market.
-        
+
         Args:
             marketId (str): Market ID
         """
-        self.client.cancel_market_orders(market=marketId)
+        # Rate limit before making API call
+        get_rate_limit_manager().acquire_sync(EndpointType.CANCEL_ALL)
+
+        try:
+            self.client.cancel_market_orders(market=marketId)
+            get_rate_limit_manager().on_response(200)
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            raise
+        except Exception as ex:
+            get_rate_limit_manager().on_response(500)
+            raise
 
     
     def merge_positions(self, amount_to_merge, condition_id, is_neg_risk_market):

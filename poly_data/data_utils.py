@@ -1,11 +1,10 @@
 import poly_data.global_state as global_state
 from poly_data.utils import get_sheet_df
-from poly_data.rate_limiter import get_rate_limiter
 import time
 
+
 def update_positions(avgOnly=False):
-    """Update positions from the API with rate limiting."""
-    get_rate_limiter().acquire_sync()
+    """Update positions from the API. Rate limiting handled in polymarket_client."""
     pos_df = global_state.client.get_all_positions()
 
     for idx, row in pos_df.iterrows():
@@ -90,36 +89,34 @@ def set_position(token, side, size, price, source='websocket'):
     print(f"Updated position from {source}, set to ", global_state.positions[token])
 
 def update_orders():
-    """Update orders from the API with rate limiting."""
-    get_rate_limiter().acquire_sync()
+    """Update orders from the API. Rate limiting handled in polymarket_client."""
     all_orders = global_state.client.get_all_orders()
 
     orders = {}
 
     if len(all_orders) > 0:
-            for token in all_orders['asset_id'].unique():
-                
-                if token not in orders:
-                    orders[str(token)] = {'buy': {'price': 0, 'size': 0}, 'sell': {'price': 0, 'size': 0}}
+        for token in all_orders['asset_id'].unique():
 
-                curr_orders = all_orders[all_orders['asset_id'] == str(token)]
-                
-                if len(curr_orders) > 0:
-                    sel_orders = {}
-                    sel_orders['buy'] = curr_orders[curr_orders['side'] == 'BUY']
-                    sel_orders['sell'] = curr_orders[curr_orders['side'] == 'SELL']
+            if token not in orders:
+                orders[str(token)] = {'buy': {'price': 0, 'size': 0}, 'sell': {'price': 0, 'size': 0}}
 
-                    for type in ['buy', 'sell']:
-                        curr = sel_orders[type]
+            curr_orders = all_orders[all_orders['asset_id'] == str(token)]
 
-                        if len(curr) > 1:
-                            print("Multiple orders found, cancelling")
-                            get_rate_limiter().acquire_sync()
-                            global_state.client.cancel_all_asset(token)
-                            orders[str(token)] = {'buy': {'price': 0, 'size': 0}, 'sell': {'price': 0, 'size': 0}}
-                        elif len(curr) == 1:
-                            orders[str(token)][type]['price'] = float(curr.iloc[0]['price'])
-                            orders[str(token)][type]['size'] = float(curr.iloc[0]['original_size'] - curr.iloc[0]['size_matched'])
+            if len(curr_orders) > 0:
+                sel_orders = {}
+                sel_orders['buy'] = curr_orders[curr_orders['side'] == 'BUY']
+                sel_orders['sell'] = curr_orders[curr_orders['side'] == 'SELL']
+
+                for order_type in ['buy', 'sell']:
+                    curr = sel_orders[order_type]
+
+                    if len(curr) > 1:
+                        print("Multiple orders found, cancelling")
+                        global_state.client.cancel_all_asset(token)  # Rate limiting in polymarket_client
+                        orders[str(token)] = {'buy': {'price': 0, 'size': 0}, 'sell': {'price': 0, 'size': 0}}
+                    elif len(curr) == 1:
+                        orders[str(token)][order_type]['price'] = float(curr.iloc[0]['price'])
+                        orders[str(token)][order_type]['size'] = float(curr.iloc[0]['original_size'] - curr.iloc[0]['size_matched'])
 
     global_state.orders = orders
 

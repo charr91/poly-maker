@@ -40,3 +40,8 @@ packages = ["poly_data", "poly_stats", "poly_utils", "data_updater"]
 [tool.black]
 line-length = 100
 target-version = ["py39"]
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.2.0",
+]

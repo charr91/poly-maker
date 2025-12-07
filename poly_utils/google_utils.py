@@ -1,12 +1,16 @@
 from google.oauth2.service_account import Credentials
 import gspread
 import os
+import time
 import pandas as pd
 import requests
 import re
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Delay between retry attempts when fetching Google Sheets data (in seconds)
+GOOGLE_SHEETS_RETRY_DELAY = 1.0
 
 def get_spreadsheet(read_only=False):
     """
@@ -95,16 +99,20 @@ class ReadOnlyWorksheet:
             for gid in [0, 1, 2, 3, 4]:
                 urls_to_try.append(f"https://docs.google.com/spreadsheets/d/{self.sheet_id}/export?format=csv&gid={gid}")
             
-            for csv_url in urls_to_try:
+            for i, csv_url in enumerate(urls_to_try):
+                # Add delay between retry attempts to avoid hammering the server
+                if i > 0:
+                    time.sleep(GOOGLE_SHEETS_RETRY_DELAY)
+
                 try:
                     print(f"Trying to fetch sheet '{self.title}' from: {csv_url}")
                     response = requests.get(csv_url, timeout=30)
                     response.raise_for_status()
-                    
+
                     # Read CSV data into DataFrame
                     from io import StringIO
                     df = pd.read_csv(StringIO(response.text))
-                    
+
                     # Check if we got meaningful data (not empty or error response)
                     if not df.empty and len(df.columns) > 1:
                         # For Hyperparameters sheet, verify it has the expected columns
@@ -120,7 +128,7 @@ class ReadOnlyWorksheet:
                             print(f"Successfully fetched {len(df)} records from sheet '{self.title}'")
                             # Convert to list of dictionaries (same format as gspread)
                             return df.to_dict('records')
-                    
+
                 except Exception as url_error:
                     print(f"Failed with URL {csv_url}: {url_error}")
                     continue

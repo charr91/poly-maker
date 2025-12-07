@@ -4,6 +4,7 @@ from py_clob_client.clob_types import RequestArgs
 
 from poly_utils.google_utils import get_spreadsheet
 from gspread_dataframe import set_with_dataframe
+from poly_data.rate_limiter import get_rate_limit_manager, EndpointType
 import requests
 import json
 import os
@@ -21,8 +22,8 @@ def get_markets_df(wk_full):
     return markets_df
 
 def get_all_orders(client):
-    orders = client.client.get_orders()
-    orders_df = pd.DataFrame(orders)
+    """Get all orders. Uses rate-limited client method."""
+    orders_df = client.get_all_orders()
 
     if len(orders_df) > 0:
         orders_df['order_size'] = orders_df['original_size'].astype('float') - orders_df['size_matched'].astype('float')
@@ -73,12 +74,10 @@ def combine_dfs(orders_df, positions, markets_df, selected_df):
     return combined_df
 
 def get_earnings(client):
+    """Get earnings data from Polymarket rewards API with rate limiting."""
     args = RequestArgs(method='GET', request_path='/rewards/user/markets')
     l2Headers = create_level_2_headers(client.signer, client.creds, args)
     url = "https://polymarket.com/api/rewards/markets"
-
-    cursor = ''
-    markets = []
 
     params = {
         "l2Headers": json.dumps(l2Headers),
@@ -86,11 +85,16 @@ def get_earnings(client):
         "position": "DESC",
         "makerAddress": os.getenv('BROWSER_WALLET'),
         "authenticationType": "eoa",
-        "nextCursor": cursor,
+        "nextCursor": '',
         "requestPath": "/rewards/user/markets"
     }
 
-    r = requests.get(url,  params=params)
+    # Rate limit before making API call
+    get_rate_limit_manager().acquire_sync(EndpointType.DATA_API)
+
+    r = requests.get(url, params=params)
+    get_rate_limit_manager().on_response(r.status_code)
+
     results = r.json()
 
     data = pd.DataFrame(results['data'])
