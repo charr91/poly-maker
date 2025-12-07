@@ -12,6 +12,7 @@ import poly_data.CONSTANTS as CONSTANTS
 # Import utility functions for trading
 from poly_data.trading_utils import get_best_bid_ask_deets, get_order_prices, get_buy_sell_amount, round_down, round_up
 from poly_data.data_utils import get_position, get_order, set_position
+from poly_data.rate_limiter import get_rate_limiter
 
 # Create directory for storing position risk information
 if not os.path.exists('positions/'):
@@ -47,6 +48,7 @@ def send_buy_order(order):
     
     if should_cancel and (existing_buy_size > 0 or order['orders']['sell']['size'] > 0):
         print(f"Cancelling buy orders - price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
+        get_rate_limiter().acquire_sync()
         client.cancel_all_asset(order['token'])
     elif not should_cancel:
         print(f"Keeping existing buy orders - minor changes: price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
@@ -66,11 +68,12 @@ def send_buy_order(order):
         if order['price'] >= 0.1 and order['price'] < 0.9:
             print(f'Creating new order for {order["size"]} at {order["price"]}')
             print(order['token'], 'BUY', order['price'], order['size'])
+            get_rate_limiter().acquire_sync()
             client.create_order(
-                order['token'], 
-                'BUY', 
-                order['price'], 
-                order['size'], 
+                order['token'],
+                'BUY',
+                order['price'],
+                order['size'],
                 True if order['neg_risk'] == 'TRUE' else False
             )
         else:
@@ -108,17 +111,19 @@ def send_sell_order(order):
     
     if should_cancel and (existing_sell_size > 0 or order['orders']['buy']['size'] > 0):
         print(f"Cancelling sell orders - price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
+        get_rate_limiter().acquire_sync()
         client.cancel_all_asset(order['token'])
     elif not should_cancel:
         print(f"Keeping existing sell orders - minor changes: price diff: {price_diff:.4f}, size diff: {size_diff:.1f}")
         return  # Don't place new order if existing one is fine
 
     print(f'Creating new order for {order["size"]} at {order["price"]}')
+    get_rate_limiter().acquire_sync()
     client.create_order(
-        order['token'], 
-        'SELL', 
-        order['price'], 
-        order['size'], 
+        order['token'],
+        'SELL',
+        order['price'],
+        order['size'],
         True if order['neg_risk'] == 'TRUE' else False
     )
 
@@ -146,6 +151,7 @@ async def perform_trade(market):
     async with market_locks[market]:
         try:
             client = global_state.client
+            rate_limiter = get_rate_limiter()
             # Get market details from the configuration
             row = global_state.df[global_state.df['condition_id'] == market].iloc[0]      
             # Determine decimal precision from tick size
@@ -172,14 +178,17 @@ async def perform_trade(market):
             # Only merge if positions are above minimum threshold
             if float(amount_to_merge) > CONSTANTS.MIN_MERGE_SIZE:
                 # Get exact position sizes from blockchain for merging
+                await rate_limiter.acquire()
                 pos_1 = client.get_position(row['token1'])[0]
+                await rate_limiter.acquire()
                 pos_2 = client.get_position(row['token2'])[0]
                 amount_to_merge = min(pos_1, pos_2)
                 scaled_amt = amount_to_merge / 10**6
-                
+
                 if scaled_amt > CONSTANTS.MIN_MERGE_SIZE:
                     print(f"Position 1 is of size {pos_1} and Position 2 is of size {pos_2}. Merging positions")
                     # Execute the merge operation
+                    await rate_limiter.acquire()
                     client.merge_positions(amount_to_merge, market, row['neg_risk'] == 'TRUE')
                     # Update our local position tracking
                     set_position(row['token1'], 'SELL', scaled_amt, 0, 'merge')
@@ -332,11 +341,12 @@ async def perform_trade(market):
                         order['price'] = n_deets['best_bid']
 
                         # Set period to avoid trading after stop-loss
-                        risk_details['sleep_till'] = str(pd.Timestamp.utcnow().tz_localize(None) + 
+                        risk_details['sleep_till'] = str(pd.Timestamp.utcnow().tz_localize(None) +
                                                         pd.Timedelta(hours=params['sleep_period']))
 
                         print("Risking off")
                         send_sell_order(order)
+                        await rate_limiter.acquire()
                         client.cancel_all_market(market)
 
                         # Save risk details to file
@@ -388,6 +398,7 @@ async def perform_trade(market):
                             print(f'3 Hour Volatility of {row["3_hour"]} is greater than max volatility of '
                                   f'{params["volatility_threshold"]} or price of {order["price"]} is outside '
                                   f'0.05 of {sheet_value}. Cancelling all orders')
+                            await rate_limiter.acquire()
                             client.cancel_all_asset(order['token'])
                         else:
                             # Check for reverse position (holding opposite outcome)
@@ -399,14 +410,16 @@ async def perform_trade(market):
                                 print("Bypassing creation of new buy order because there is a reverse position")
                                 if orders['buy']['size'] > CONSTANTS.MIN_MERGE_SIZE:
                                     print("Cancelling buy orders because there is a reverse position")
+                                    await rate_limiter.acquire()
                                     client.cancel_all_asset(order['token'])
-                                
+
                                 continue
                             
                             # Check market buy/sell volume ratio
                             if overall_ratio < 0:
                                 send_buy = False
                                 print(f"Not sending a buy order because overall ratio is {overall_ratio}")
+                                await rate_limiter.acquire()
                                 client.cancel_all_asset(order['token'])
                             else:
                                 # Place new buy order if any of these conditions are met:

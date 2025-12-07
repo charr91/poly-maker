@@ -6,6 +6,12 @@ credentials.json
 .env.*
 positions/
 
+# VPN config (generated, contains sensitive data)
+vpn/*.ovpn
+vpn/auth.conf
+vpn/ca.rsa.4096.crt
+vpn/pia-manual-connections/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

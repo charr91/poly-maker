@@ -1,0 +1,71 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+.eggs/
+*.egg-info/
+*.egg
+
+# Development
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.hypothesis/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files (handled separately via docker-compose)
+.env
+.env.*
+
+# Sensitive files (mounted at runtime)
+credentials.json
+
+# Runtime data (mounted as volumes)
+data/
+positions/
+
+# Node modules in poly_merger (not needed for main bot)
+poly_merger/node_modules/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker files not needed in context
+docker-compose*.yml
+
+# Documentation (keep README.md for pyproject.toml build)
+DOCKER_GUIDE.md
+CHANGELOG.md
+
+# Lock files (we have uv.lock which is needed)
+package-lock.json
+
+# Claude plans
+.claude/

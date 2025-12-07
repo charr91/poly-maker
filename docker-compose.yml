@@ -1,0 +1,72 @@
+# docker-compose.yml
+# Poly-maker bot with VPN routing through gluetun (PIA Dedicated IP)
+
+services:
+  # VPN Container (gluetun with custom OpenVPN config for PIA Dedicated IP)
+  vpn:
+    image: qmcgaw/gluetun:latest
+    container_name: polybot-vpn
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Custom provider for PIA Dedicated IP
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=openvpn
+      - OPENVPN_CUSTOM_CONFIG=/gluetun/pia_dip.ovpn
+      # Auth credentials - for DIP, PIA uses: dedicated_ip_TOKEN as username
+      - OPENVPN_USER=dedicated_ip_${PIA_DIP_TOKEN}
+      - OPENVPN_PASSWORD=x
+      # Firewall (kill switch) - prevents traffic leaks if VPN drops
+      - FIREWALL=on
+      - FIREWALL_VPN_INPUT_PORTS=
+      - FIREWALL_INPUT_PORTS=
+      # DNS settings
+      - DOT=off
+      - DNS_ADDRESS=1.1.1.1
+      # Health check timing
+      - HEALTH_VPN_DURATION_INITIAL=30s
+      - HEALTH_VPN_DURATION_ADDITION=10s
+    volumes:
+      - gluetun_data:/gluetun
+      # Mount the generated OpenVPN config
+      - ./vpn/pia_dip.ovpn:/gluetun/pia_dip.ovpn:ro
+      # Mount auth file with PIA credentials
+      - ./vpn/auth.conf:/gluetun/auth.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Main Market Making Bot
+  polybot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: polybot-main
+    network_mode: "service:vpn"
+    depends_on:
+      vpn:
+        condition: service_healthy
+    environment:
+      - PK=${PK}
+      - BROWSER_ADDRESS=${BROWSER_ADDRESS}
+      - SPREADSHEET_URL=${SPREADSHEET_URL}
+    volumes:
+      # Persistent data volumes
+      - ./data:/app/data
+      - ./positions:/app/positions
+      # Read-only credentials mount
+      - ./credentials.json:/app/credentials.json:ro
+    restart: unless-stopped
+    command: ["python", "main.py"]
+    # Graceful shutdown
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+
+volumes:
+  gluetun_data:

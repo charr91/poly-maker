@@ -18,6 +18,9 @@ import subprocess                   # For calling external processes
 
 from py_clob_client.clob_types import OpenOrderParams
 
+# Rate limiting utilities
+from poly_data.rate_limiter import with_retry, get_rate_limiter
+
 # Smart contract ABIs
 from poly_data.abis import NegRiskAdapterABI, ConditionalTokenABI, erc20_abi
 
@@ -161,14 +164,19 @@ class PolymarketClient:
         """
         return self.usdc_contract.functions.balanceOf(self.browser_wallet).call() / 10**6
      
+    @with_retry(max_retries=3, base_delay=1.0, rate_limiter=get_rate_limiter())
+    def _fetch_pos_balance(self, url):
+        """Internal method to fetch position balance with retry logic."""
+        return requests.get(url)
+
     def get_pos_balance(self):
         """
         Get the total value of all positions for the connected wallet.
-        
+
         Returns:
             float: Total position value in USDC
         """
-        res = requests.get(f'https://data-api.polymarket.com/value?user={self.browser_wallet}')
+        res = self._fetch_pos_balance(f'https://data-api.polymarket.com/value?user={self.browser_wallet}')
         return float(res.json()['value'])
 
     def get_total_balance(self):
@@ -180,14 +188,19 @@ class PolymarketClient:
         """
         return self.get_usdc_balance() + self.get_pos_balance()
 
+    @with_retry(max_retries=3, base_delay=1.0, rate_limiter=get_rate_limiter())
+    def _fetch_all_positions(self, url):
+        """Internal method to fetch all positions with retry logic."""
+        return requests.get(url)
+
     def get_all_positions(self):
         """
         Get all positions for the connected wallet across all markets.
-        
+
         Returns:
             DataFrame: All positions with details like market, size, avgPrice
         """
-        res = requests.get(f'https://data-api.polymarket.com/positions?user={self.browser_wallet}')
+        res = self._fetch_all_positions(f'https://data-api.polymarket.com/positions?user={self.browser_wallet}')
         return pd.DataFrame(res.json())
     
     def get_raw_position(self, tokenId):

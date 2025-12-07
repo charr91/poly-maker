@@ -1,0 +1,66 @@
+# docker-compose.pia.yml
+# Poly-maker bot with regular PIA VPN region (not dedicated IP)
+# Set region with: ./bot.sh vpn region "US Texas"
+
+services:
+  # VPN Container (gluetun with native PIA support)
+  vpn:
+    image: qmcgaw/gluetun:latest
+    container_name: polybot-vpn
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Native PIA provider
+      - VPN_SERVICE_PROVIDER=private_internet_access
+      - VPN_TYPE=openvpn
+      - OPENVPN_USER=${PIA_USER}
+      - OPENVPN_PASSWORD=${PIA_PASS}
+      # Region set via: ./bot.sh vpn region "US Texas"
+      - SERVER_REGIONS=${PIA_REGION:-US Texas}
+      # Firewall (kill switch)
+      - FIREWALL=on
+      - FIREWALL_VPN_INPUT_PORTS=
+      - FIREWALL_INPUT_PORTS=
+      # DNS settings
+      - DOT=off
+      - DNS_ADDRESS=1.1.1.1
+      # Health check timing
+      - HEALTH_VPN_DURATION_INITIAL=30s
+      - HEALTH_VPN_DURATION_ADDITION=10s
+    volumes:
+      - gluetun_data:/gluetun
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Main Market Making Bot
+  polybot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: polybot-main
+    network_mode: "service:vpn"
+    depends_on:
+      vpn:
+        condition: service_healthy
+    environment:
+      - PK=${PK}
+      - BROWSER_ADDRESS=${BROWSER_ADDRESS}
+      - SPREADSHEET_URL=${SPREADSHEET_URL}
+    volumes:
+      - ./data:/app/data
+      - ./positions:/app/positions
+      - ./credentials.json:/app/credentials.json:ro
+    restart: unless-stopped
+    command: ["python", "main.py"]
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+
+volumes:
+  gluetun_data:

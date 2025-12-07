@@ -1,0 +1,20 @@
+# docker-compose.novpn.yml
+# Run bot without VPN - direct connection
+
+services:
+  polybot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: polybot-main
+    environment:
+      - PK=${PK}
+      - BROWSER_ADDRESS=${BROWSER_ADDRESS}
+      - SPREADSHEET_URL=${SPREADSHEET_URL}
+    volumes:
+      - ./data:/app/data
+      - ./positions:/app/positions
+      - ./credentials.json:/app/credentials.json:ro
+    restart: unless-stopped
+    command: ["python", "main.py"]
+    stop_grace_period: 30s

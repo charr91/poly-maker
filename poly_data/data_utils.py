@@ -1,10 +1,11 @@
 import poly_data.global_state as global_state
 from poly_data.utils import get_sheet_df
+from poly_data.rate_limiter import get_rate_limiter
 import time
-import poly_data.global_state as global_state
 
-#sth here seems to be removing the position
 def update_positions(avgOnly=False):
+    """Update positions from the API with rate limiting."""
+    get_rate_limiter().acquire_sync()
     pos_df = global_state.client.get_all_positions()
 
     for idx, row in pos_df.iterrows():
@@ -89,6 +90,8 @@ def set_position(token, side, size, price, source='websocket'):
     print(f"Updated position from {source}, set to ", global_state.positions[token])
 
 def update_orders():
+    """Update orders from the API with rate limiting."""
+    get_rate_limiter().acquire_sync()
     all_orders = global_state.client.get_all_orders()
 
     orders = {}
@@ -111,6 +114,7 @@ def update_orders():
 
                         if len(curr) > 1:
                             print("Multiple orders found, cancelling")
+                            get_rate_limiter().acquire_sync()
                             global_state.client.cancel_all_asset(token)
                             orders[str(token)] = {'buy': {'price': 0, 'size': 0}, 'sell': {'price': 0, 'size': 0}}
                         elif len(curr) == 1:
