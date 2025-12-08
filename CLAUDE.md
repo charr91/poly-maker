@@ -159,6 +159,23 @@ uv run black .
 - **Risk-Off Periods**: After stop-loss trigger, pauses trading for configurable hours
 - **Price Sanity Checks**: Only places orders between 0.1-0.9 price range
 - **Opposing Position Detection**: Won't buy more if holding significant opposite side
+- **Market Cleanup**: Auto-cancels orders and closes positions when markets are removed from Selected Markets sheet (see below)
+
+### Market Cleanup
+
+When a market is removed from the "Selected Markets" sheet, the bot automatically cleans up:
+1. **Grace period** (30s default): Allows market to return if accidentally removed
+2. **Order cancellation**: Cancels all open orders for the market
+3. **Position closing**:
+   - In-profit positions → sell at market (immediate)
+   - Underwater positions → limit order at break-even price
+4. **State cleanup**: Removes from all in-memory structures, deletes risk-off files
+
+Configuration via `.env`:
+- `CLEANUP_CANCEL_ORDERS`: Cancel orders on removal (default: true)
+- `CLEANUP_SELL_POSITIONS`: Close positions on removal (default: true)
+- `CLEANUP_GRACE_PERIOD`: Seconds before cleanup triggers (default: 30)
+- `CLEANUP_FORCE_MARKET_SELL`: Force market sell even if underwater (default: false)
 
 ### Global State Management
 
@@ -170,6 +187,8 @@ uv run black .
 - `performing`: Set of trades currently in flight (prevents duplicates)
 - `params`: Hyperparameters per market type (from Google Sheets)
 - `client`: PolymarketClient instance
+- `pending_removal`: Markets queued for cleanup (grace period)
+- `removing_markets`: Markets currently being cleaned up (skips trades)
 
 ### Rate Limiting
 
@@ -183,6 +202,7 @@ This prevents API bans when operating on many markets simultaneously.
 
 Defined in `poly_data/CONSTANTS.py`:
 - `MIN_MERGE_SIZE`: Minimum position size to trigger merging
+- `CLEANUP_*`: Market cleanup configuration (see Market Cleanup section)
 
 ## Common Workflows
 

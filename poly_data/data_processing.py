@@ -71,6 +71,11 @@ def schedule_trade(market: str) -> None:
     1. Rapid updates extend the quiet period (debounce behavior)
     2. A trade is always executed after the quiet period ends
     """
+    # Skip trades for markets being removed
+    if market in global_state.removing_markets:
+        logger.debug(f"Skipping trade for market being removed: {market[:20]}")
+        return
+
     now = time.time()
 
     # Cancel any existing pending task for this market

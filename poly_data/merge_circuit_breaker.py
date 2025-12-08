@@ -183,6 +183,18 @@ class MergeCircuitBreaker:
         with self._lock:
             return self._states.get(condition_id)
 
+    def clear_market(self, condition_id: str) -> None:
+        """
+        Remove all state for a market (used during cleanup).
+
+        Args:
+            condition_id: Market condition ID to clear
+        """
+        with self._lock:
+            if condition_id in self._states:
+                del self._states[condition_id]
+                logger.debug(f"Cleared merge circuit breaker state for {condition_id[:16]}...")
+
 
 _merge_circuit_breaker: Optional[MergeCircuitBreaker] = None
 

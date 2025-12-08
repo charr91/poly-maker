@@ -101,6 +101,25 @@ git pull
 └─────────────────────────────────────┘
 ```
 
+## Configuration
+
+Trading behavior is configured via `.env`. See `.env.example` for all options.
+
+### Market Cleanup
+
+When you remove a market from the "Selected Markets" sheet, the bot automatically cleans up:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLEANUP_CANCEL_ORDERS` | `true` | Cancel open orders when market removed |
+| `CLEANUP_SELL_POSITIONS` | `true` | Close positions when market removed |
+| `CLEANUP_GRACE_PERIOD` | `30` | Seconds before cleanup triggers |
+| `CLEANUP_FORCE_MARKET_SELL` | `false` | Force market sell even if underwater |
+
+Position closing behavior (when `CLEANUP_FORCE_MARKET_SELL=false`):
+- **In-profit positions**: Sell at market price (immediate)
+- **Underwater positions**: Place limit order at break-even price
+
 ## Files
 
 | File | Purpose |

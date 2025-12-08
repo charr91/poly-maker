@@ -7,13 +7,13 @@ import pandas as pd
 all_tokens = []
 
 # Mapping between tokens in the same market (YES->NO, NO->YES)
-REVERSE_TOKENS = {}  
+REVERSE_TOKENS = {}
 
 # Order book data for all markets
-all_data = {}  
+all_data = {}
 
 # Market configuration data from Google Sheets
-df = None  
+df = None
 
 # ============ Client & Parameters ============
 
@@ -47,3 +47,11 @@ orders = {}
 # Format: {token_id: {'size': float, 'avgPrice': float}}
 positions = {}
 
+# ============ Cleanup State ============
+
+# Markets pending removal (grace period before cleanup)
+# Format: {condition_id: {'timestamp': float, 'tokens': [t1, t2], 'question': str, 'neg_risk': bool}}
+pending_removal = {}
+
+# Markets currently being cleaned up (to skip WebSocket updates during cleanup)
+removing_markets = set()
