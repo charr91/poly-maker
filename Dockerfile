@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
-RUN groupadd -r polybot && useradd -r -g polybot polybot
+RUN groupadd -g 1000 polybot && useradd -u 1000 -g polybot polybot
 
 WORKDIR /app
 
