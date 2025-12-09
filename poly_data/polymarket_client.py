@@ -5,6 +5,10 @@ import atexit  # Cleanup handlers
 from concurrent.futures import ThreadPoolExecutor
 import functools  # For partial function binding
 from typing import Optional
+import logging  # Logging support
+
+# Module logger
+logger = logging.getLogger("poly_maker.polymarket_client")
 
 # Polymarket API client libraries
 from py_clob_client.client import ClobClient
@@ -136,6 +140,34 @@ class PolymarketClient:
         Returns:
             dict: Response from the API containing order details, or empty dict on error
         """
+        # Pre-flight balance check for SELL orders
+        # This prevents "not enough balance / allowance" errors when in-memory
+        # position state diverges from actual blockchain balance
+        if action == "SELL":
+            try:
+                actual_balance = self.get_raw_position(str(marketId)) / 1e6
+                if actual_balance < size:
+                    if actual_balance < 1:  # Below dust threshold, skip entirely
+                        logger.warning(
+                            "Skipping sell order: insufficient balance (%.2f < %.2f) for %s",
+                            actual_balance,
+                            size,
+                            str(marketId)[:20],
+                        )
+                        return {}  # Return empty dict (same as error case)
+                    else:
+                        # Adjust size to actual balance
+                        logger.info(
+                            "Adjusting sell size from %.2f to actual balance %.2f for %s",
+                            size,
+                            actual_balance,
+                            str(marketId)[:20],
+                        )
+                        size = actual_balance
+            except Exception as e:
+                # Balance check failed - continue with order and let API decide
+                logger.warning("Balance check failed, proceeding with order: %s", e)
+
         # Rate limit before making API call
         get_rate_limit_manager().acquire_sync(EndpointType.ORDER)
 

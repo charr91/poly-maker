@@ -174,14 +174,37 @@ def get_order(token):
 
 
 def set_order(token, side, size, price):
-    curr = {}
-    curr = {side: {"price": 0, "size": 0}}
+    """
+    Update order tracking for a specific token and side.
 
+    Preserves the other side's order data when updating one side.
+
+    Args:
+        token: Token ID
+        side: 'buy' or 'sell'
+        size: Order size
+        price: Order price
+    """
+    token = str(token)
+
+    # Get existing orders or initialize with both sides
+    if token in global_state.orders:
+        curr = global_state.orders[token].copy()
+    else:
+        curr = {"buy": {"price": 0, "size": 0}, "sell": {"price": 0, "size": 0}}
+
+    # Ensure both sides exist (defensive - handles corrupted state)
+    if "buy" not in curr:
+        curr["buy"] = {"price": 0, "size": 0}
+    if "sell" not in curr:
+        curr["sell"] = {"price": 0, "size": 0}
+
+    # Update only the specified side
     curr[side]["size"] = float(size)
     curr[side]["price"] = float(price)
 
-    global_state.orders[str(token)] = curr
-    logger.debug("Order updated: %s", curr)
+    global_state.orders[token] = curr
+    logger.debug("Order updated for %s: %s", token[:20], curr)
 
 
 # ============ Market Cleanup Functions ============

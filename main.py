@@ -4,6 +4,7 @@ import time  # Time functions
 import asyncio  # Asynchronous I/O
 import logging  # Logging
 import threading  # Thread management
+import random  # For jitter in retry logic
 
 from poly_data.polymarket_client import PolymarketClient
 from poly_data.data_utils import (
@@ -18,6 +19,11 @@ from poly_data.data_processing import remove_from_performing
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Retry configuration for transient API errors
+UPDATE_MAX_RETRIES = int(os.getenv("UPDATE_MAX_RETRIES", "3"))
+UPDATE_BASE_DELAY = float(os.getenv("UPDATE_BASE_DELAY", "5.0"))
+UPDATE_MAX_DELAY = float(os.getenv("UPDATE_MAX_DELAY", "60.0"))
 
 # Configure logging - level controllable via LOG_LEVEL env var (default: INFO)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -69,35 +75,113 @@ def remove_from_pending():
         logger.debug("Full traceback:", exc_info=True)
 
 
+def _is_transient_error(exception: Exception) -> bool:
+    """
+    Check if an exception is a transient error that should be retried.
+
+    Transient errors include:
+    - 502 Bad Gateway
+    - 503 Service Unavailable
+    - 504 Gateway Timeout
+    - Connection errors
+    - Timeout errors
+
+    Args:
+        exception: The exception to check
+
+    Returns:
+        True if the error is transient and should be retried
+    """
+    error_str = str(exception).lower()
+    transient_indicators = [
+        "503",
+        "502",
+        "504",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "connection",
+        "timeout",
+        "temporarily unavailable",
+    ]
+    return any(indicator in error_str for indicator in transient_indicators)
+
+
+def _execute_with_retry(func, func_name: str) -> bool:
+    """
+    Execute a function with retry logic for transient errors.
+
+    Uses exponential backoff with jitter for retries.
+
+    Args:
+        func: Function to execute (no arguments)
+        func_name: Name for logging purposes
+
+    Returns:
+        True if successful, False if failed after all retries
+    """
+    for attempt in range(UPDATE_MAX_RETRIES + 1):
+        try:
+            func()
+            return True
+        except Exception as e:
+            if _is_transient_error(e) and attempt < UPDATE_MAX_RETRIES:
+                # Calculate delay with exponential backoff and jitter
+                delay = min(UPDATE_BASE_DELAY * (2**attempt), UPDATE_MAX_DELAY)
+                jitter = delay * random.uniform(0, 0.25)
+                total_delay = delay + jitter
+
+                logger.warning(
+                    "%s failed (attempt %d/%d): %s. Retrying in %.1fs",
+                    func_name,
+                    attempt + 1,
+                    UPDATE_MAX_RETRIES + 1,
+                    e,
+                    total_delay,
+                )
+                time.sleep(total_delay)
+            else:
+                # Non-transient error or max retries exceeded
+                logger.error("%s failed: %s", func_name, e)
+                logger.debug("Full traceback:", exc_info=True)
+                return False
+    return False
+
+
 def update_periodically():
     """
     Background thread function that periodically updates market data, positions and orders.
+
+    Features:
     - Positions and orders are updated every 5 seconds
     - Market data is updated every 30 seconds (every 6 cycles)
     - Stale pending trades are removed each cycle
+    - Transient API errors (503, etc.) are retried with exponential backoff
     """
     i = 1
     while True:
         time.sleep(5)  # Update every 5 seconds
 
+        # Clean up stale trades (low risk, no retry needed)
         try:
-            # Clean up stale trades
             remove_from_pending()
-
-            # Update positions and orders every cycle
-            update_positions(avgOnly=True)  # Only update average price, not position size
-            update_orders()
-
-            # Update market data every 6th cycle (30 seconds)
-            if i % 6 == 0:
-                update_markets()
-                i = 1
-
-            gc.collect()  # Force garbage collection to free memory
-            i += 1
         except Exception as e:
-            logger.error("Error in update_periodically: %s", e)
+            logger.error("Error in remove_from_pending: %s", e)
             logger.debug("Full traceback:", exc_info=True)
+
+        # Update positions with retry for transient errors
+        _execute_with_retry(lambda: update_positions(avgOnly=True), "update_positions")
+
+        # Update orders with retry for transient errors
+        _execute_with_retry(update_orders, "update_orders")
+
+        # Update market data every 6th cycle (30 seconds)
+        if i % 6 == 0:
+            _execute_with_retry(update_markets, "update_markets")
+            i = 1
+
+        gc.collect()  # Force garbage collection to free memory
+        i += 1
 
 
 async def main():
