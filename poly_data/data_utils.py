@@ -259,19 +259,23 @@ async def cleanup_orphaned_positions() -> None:
             logger.warning("Could not fetch market info for orphaned token %s", token[:20])
             continue
 
-        condition_id = market_info.get("condition_id")
-        if not condition_id or condition_id in processed_conditions:
+        # Gamma API returns camelCase field names
+        condition_id = market_info.get("conditionId")
+        if not condition_id:
+            logger.warning(
+                "Market info missing conditionId for token %s, keys: %s",
+                token[:20],
+                list(market_info.keys()),
+            )
+            continue
+        if condition_id in processed_conditions:
             continue
         processed_conditions.add(condition_id)
 
-        # Build token list from market info
-        tokens = []
-        for t in market_info.get("tokens", []):
-            token_id = t.get("token_id")
-            if token_id:
-                tokens.append(str(token_id))
+        # clobTokenIds is a list of token ID strings from Gamma API
+        tokens = [str(t) for t in market_info.get("clobTokenIds", [])]
 
-        neg_risk = market_info.get("neg_risk", False)
+        neg_risk = market_info.get("negRisk", False)
         question = market_info.get("question", "Unknown")
 
         removal_info = {

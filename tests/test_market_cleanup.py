@@ -976,11 +976,12 @@ class TestCleanupOrphanedPositions:
         ):
             mock_gs.client = mock_client
             mock_detect.return_value = {"orphan_token"}
+            # Gamma API returns camelCase field names
             mock_client.get_market_by_token_async.return_value = {
-                "condition_id": "cond123",
+                "conditionId": "cond123",
                 "question": "Test market?",
-                "neg_risk": False,
-                "tokens": [{"token_id": "orphan_token"}, {"token_id": "token2"}],
+                "negRisk": False,
+                "clobTokenIds": ["orphan_token", "token2"],
             }
 
             await data_utils.cleanup_orphaned_positions()
@@ -998,11 +999,12 @@ class TestCleanupOrphanedPositions:
         ):
             mock_gs.client = mock_client
             mock_detect.return_value = {"orphan_token"}
+            # Gamma API returns camelCase field names
             mock_client.get_market_by_token_async.return_value = {
-                "condition_id": "cond123",
+                "conditionId": "cond123",
                 "question": "Will it rain?",
-                "neg_risk": True,
-                "tokens": [{"token_id": "orphan_token"}, {"token_id": "other_token"}],
+                "negRisk": True,
+                "clobTokenIds": ["orphan_token", "other_token"],
             }
 
             await data_utils.cleanup_orphaned_positions()
@@ -1024,14 +1026,14 @@ class TestCleanupOrphanedPositions:
         ):
             mock_gs.client = mock_client
             mock_detect.return_value = {"token1", "token2"}
-            # First call fails, second succeeds
+            # First call fails, second succeeds (Gamma API returns camelCase)
             mock_client.get_market_by_token_async.side_effect = [
                 None,  # API failure
                 {
-                    "condition_id": "c2",
+                    "conditionId": "c2",
                     "question": "Q2",
-                    "neg_risk": False,
-                    "tokens": [{"token_id": "token2"}],
+                    "negRisk": False,
+                    "clobTokenIds": ["token2"],
                 },
             ]
 
@@ -1050,12 +1052,12 @@ class TestCleanupOrphanedPositions:
         ):
             mock_gs.client = mock_client
             mock_detect.return_value = {"yes_token", "no_token"}
-            # Both tokens belong to same market
+            # Both tokens belong to same market (Gamma API returns camelCase)
             mock_client.get_market_by_token_async.return_value = {
-                "condition_id": "same_market",
+                "conditionId": "same_market",
                 "question": "Same market",
-                "neg_risk": False,
-                "tokens": [{"token_id": "yes_token"}, {"token_id": "no_token"}],
+                "negRisk": False,
+                "clobTokenIds": ["yes_token", "no_token"],
             }
 
             await data_utils.cleanup_orphaned_positions()
@@ -1075,18 +1077,19 @@ class TestCleanupOrphanedPositions:
         ):
             mock_gs.client = mock_client
             mock_detect.return_value = {"token1", "token2"}
+            # Gamma API returns camelCase field names
             mock_client.get_market_by_token_async.side_effect = [
                 {
-                    "condition_id": "c1",
+                    "conditionId": "c1",
                     "question": "Q1",
-                    "neg_risk": False,
-                    "tokens": [{"token_id": "token1"}],
+                    "negRisk": False,
+                    "clobTokenIds": ["token1"],
                 },
                 {
-                    "condition_id": "c2",
+                    "conditionId": "c2",
                     "question": "Q2",
-                    "neg_risk": False,
-                    "tokens": [{"token_id": "token2"}],
+                    "negRisk": False,
+                    "clobTokenIds": ["token2"],
                 },
             ]
             # First cleanup fails, second should still run
@@ -1115,13 +1118,14 @@ class TestGetMarketByToken:
 
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = [{"condition_id": "c1", "question": "Q?"}]
+            # Gamma API returns camelCase field names
+            mock_response.json.return_value = [{"conditionId": "c1", "question": "Q?"}]
             mock_get.return_value = mock_response
 
             client = PolymarketClient()
             result = client.get_market_by_token("token123")
 
-            assert result == {"condition_id": "c1", "question": "Q?"}
+            assert result == {"conditionId": "c1", "question": "Q?"}
             mock_get.assert_called_with(
                 "https://gamma-api.polymarket.com/markets?clob_token_ids=token123",
                 timeout=30,
