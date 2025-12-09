@@ -3,6 +3,7 @@ Tests for the polymarket_client module.
 
 Tests cover:
 - create_order: Balance validation for SELL orders
+- BalanceCache: Thread-safe balance caching
 """
 
 import pytest
@@ -15,6 +16,11 @@ class TestCreateOrderBalanceValidation:
     @pytest.fixture
     def mock_client(self):
         """Create a mock PolymarketClient with necessary attributes."""
+        # Clear the global balance cache before each test to ensure fresh state
+        from poly_data.polymarket_client import _balance_cache
+
+        _balance_cache.clear()
+
         with patch("poly_data.polymarket_client.ClobClient"):
             with patch("poly_data.polymarket_client.Web3"):
                 with patch("poly_data.polymarket_client.Account"):
@@ -41,6 +47,9 @@ class TestCreateOrderBalanceValidation:
                             mock_rate_limit.return_value = mock_manager
 
                             yield client
+
+                        # Clear cache after test as well
+                        _balance_cache.clear()
 
     def test_sell_order_skipped_when_balance_zero(self, mock_client):
         """Test that sell order returns {} when balance is zero."""
@@ -246,3 +255,166 @@ class TestCreateOrderBalanceValidation:
         assert order_args.size == 100
 
         mock_client.client.post_order.assert_called_once()
+
+
+class TestBalanceCache:
+    """Tests for the BalanceCache class."""
+
+    def test_set_and_get_returns_cached_value(self):
+        """Test that set followed by get returns the cached value."""
+        from poly_data.polymarket_client import BalanceCache
+
+        cache = BalanceCache(ttl_seconds=10.0)
+        cache.set("token123", 100.5)
+
+        result = cache.get("token123")
+        assert result == 100.5
+
+    def test_get_nonexistent_returns_none(self):
+        """Test that get for non-existent key returns None."""
+        from poly_data.polymarket_client import BalanceCache
+
+        cache = BalanceCache(ttl_seconds=10.0)
+
+        result = cache.get("nonexistent")
+        assert result is None
+
+    def test_get_expired_returns_none(self):
+        """Test that get returns None after TTL expires."""
+        from poly_data.polymarket_client import BalanceCache
+        import time
+
+        cache = BalanceCache(ttl_seconds=0.05)  # 50ms TTL
+        cache.set("token123", 100.5)
+
+        # Wait for expiration
+        time.sleep(0.1)
+
+        result = cache.get("token123")
+        assert result is None
+
+    def test_get_before_expiry_returns_value(self):
+        """Test that get returns value before TTL expires."""
+        from poly_data.polymarket_client import BalanceCache
+        import time
+
+        cache = BalanceCache(ttl_seconds=1.0)  # 1 second TTL
+        cache.set("token123", 100.5)
+
+        # Don't wait long
+        time.sleep(0.01)
+
+        result = cache.get("token123")
+        assert result == 100.5
+
+    def test_invalidate_removes_entry(self):
+        """Test that invalidate removes the cached entry."""
+        from poly_data.polymarket_client import BalanceCache
+
+        cache = BalanceCache(ttl_seconds=10.0)
+        cache.set("token123", 100.5)
+
+        cache.invalidate("token123")
+
+        result = cache.get("token123")
+        assert result is None
+
+    def test_invalidate_nonexistent_no_error(self):
+        """Test that invalidating a non-existent key doesn't raise."""
+        from poly_data.polymarket_client import BalanceCache
+
+        cache = BalanceCache(ttl_seconds=10.0)
+
+        # Should not raise
+        cache.invalidate("nonexistent")
+
+    def test_clear_removes_all_entries(self):
+        """Test that clear removes all cached entries."""
+        from poly_data.polymarket_client import BalanceCache
+
+        cache = BalanceCache(ttl_seconds=10.0)
+        cache.set("token1", 100.0)
+        cache.set("token2", 200.0)
+        cache.set("token3", 300.0)
+
+        cache.clear()
+
+        assert cache.get("token1") is None
+        assert cache.get("token2") is None
+        assert cache.get("token3") is None
+
+    def test_overwrite_updates_value_and_timestamp(self):
+        """Test that setting same key updates value and resets TTL."""
+        from poly_data.polymarket_client import BalanceCache
+        import time
+
+        cache = BalanceCache(ttl_seconds=0.1)  # 100ms TTL
+        cache.set("token123", 100.0)
+
+        # Wait 60ms
+        time.sleep(0.06)
+
+        # Update the value (resets TTL)
+        cache.set("token123", 200.0)
+
+        # Wait another 60ms (would be expired if TTL wasn't reset)
+        time.sleep(0.06)
+
+        result = cache.get("token123")
+        assert result == 200.0
+
+    def test_multiple_tokens_independent(self):
+        """Test that different tokens have independent cache entries."""
+        from poly_data.polymarket_client import BalanceCache
+
+        cache = BalanceCache(ttl_seconds=10.0)
+        cache.set("token1", 100.0)
+        cache.set("token2", 200.0)
+
+        assert cache.get("token1") == 100.0
+        assert cache.get("token2") == 200.0
+
+        cache.invalidate("token1")
+
+        assert cache.get("token1") is None
+        assert cache.get("token2") == 200.0
+
+    def test_thread_safety(self):
+        """Test that cache is thread-safe with concurrent access."""
+        from poly_data.polymarket_client import BalanceCache
+        import threading
+        import time
+
+        cache = BalanceCache(ttl_seconds=10.0)
+        errors = []
+
+        def writer(token_id, value, iterations):
+            try:
+                for _ in range(iterations):
+                    cache.set(token_id, value)
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        def reader(token_id, iterations):
+            try:
+                for _ in range(iterations):
+                    cache.get(token_id)
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=writer, args=("token1", 100.0, 50)),
+            threading.Thread(target=writer, args=("token1", 200.0, 50)),
+            threading.Thread(target=reader, args=("token1", 100)),
+            threading.Thread(target=writer, args=("token2", 300.0, 50)),
+            threading.Thread(target=reader, args=("token2", 100)),
+        ]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0, f"Thread safety errors: {errors}"

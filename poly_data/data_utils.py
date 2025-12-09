@@ -173,31 +173,37 @@ def get_order(token):
         return {"buy": {"price": 0, "size": 0}, "sell": {"price": 0, "size": 0}}
 
 
+def _default_order_side() -> dict:
+    """Return a new default order side dict."""
+    return {"price": 0, "size": 0}
+
+
 def set_order(token, side, size, price):
     """
     Update order tracking for a specific token and side.
 
     Preserves the other side's order data when updating one side.
+    Creates deep copies to avoid mutating the original state during updates.
 
     Args:
-        token: Token ID
+        token: Token ID (will be converted to string)
         side: 'buy' or 'sell'
-        size: Order size
-        price: Order price
+        size: Order size (will be converted to float)
+        price: Order price (will be converted to float)
     """
     token = str(token)
 
-    # Get existing orders or initialize with both sides
+    # Build new order dict with deep copies of nested structures
+    # This avoids the shallow copy bug where updating curr[side] would
+    # mutate the original nested dict before reassignment
     if token in global_state.orders:
-        curr = global_state.orders[token].copy()
+        existing = global_state.orders[token]
+        curr = {
+            "buy": existing.get("buy", _default_order_side()).copy(),
+            "sell": existing.get("sell", _default_order_side()).copy(),
+        }
     else:
-        curr = {"buy": {"price": 0, "size": 0}, "sell": {"price": 0, "size": 0}}
-
-    # Ensure both sides exist (defensive - handles corrupted state)
-    if "buy" not in curr:
-        curr["buy"] = {"price": 0, "size": 0}
-    if "sell" not in curr:
-        curr["sell"] = {"price": 0, "size": 0}
+        curr = {"buy": _default_order_side(), "sell": _default_order_side()}
 
     # Update only the specified side
     curr[side]["size"] = float(size)

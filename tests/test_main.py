@@ -2,13 +2,14 @@
 Tests for the main module.
 
 Tests cover:
-- _is_transient_error: Transient error detection
+- _is_transient_error: Transient error detection (string-based and type-based)
 - _execute_with_retry: Retry logic with exponential backoff
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock, call, Mock
 import time
+import requests.exceptions
 
 from main import _is_transient_error, _execute_with_retry
 
@@ -36,15 +37,19 @@ class TestIsTransientError:
         error = Exception("The service is temporarily unavailable")
         assert _is_transient_error(error) is True
 
-    def test_detects_connection_error(self):
-        """Test connection errors are detected."""
+    def test_string_connection_error_not_transient(self):
+        """Test string 'Connection refused' is NOT detected (use type-based instead)."""
+        # String-based fallback doesn't include 'connection' patterns
+        # Use actual ConnectionError type for type-based detection
         error = Exception("Connection refused")
-        assert _is_transient_error(error) is True
+        assert _is_transient_error(error) is False
 
-    def test_detects_timeout_error(self):
-        """Test timeout errors are detected."""
+    def test_string_timeout_error_not_transient(self):
+        """Test string 'timeout' alone is NOT detected (use type-based instead)."""
+        # String-based fallback doesn't include 'timeout' alone
+        # Use actual TimeoutError type for type-based detection
         error = Exception("Request timeout after 30 seconds")
-        assert _is_transient_error(error) is True
+        assert _is_transient_error(error) is False
 
     def test_detects_bad_gateway_text(self):
         """Test 'bad gateway' text is detected."""
@@ -80,6 +85,104 @@ class TestIsTransientError:
         """Test error detection is case insensitive."""
         error = Exception("SERVICE UNAVAILABLE")
         assert _is_transient_error(error) is True
+
+    # Type-based error detection tests
+
+    def test_detects_builtin_connection_error_type(self):
+        """Test built-in ConnectionError is detected by type."""
+        error = ConnectionError("Connection failed")
+        assert _is_transient_error(error) is True
+
+    def test_detects_connection_refused_error_type(self):
+        """Test ConnectionRefusedError is detected by type."""
+        error = ConnectionRefusedError("Connection refused")
+        assert _is_transient_error(error) is True
+
+    def test_detects_connection_reset_error_type(self):
+        """Test ConnectionResetError is detected by type."""
+        error = ConnectionResetError("Connection reset by peer")
+        assert _is_transient_error(error) is True
+
+    def test_detects_timeout_error_type(self):
+        """Test built-in TimeoutError is detected by type."""
+        error = TimeoutError("Operation timed out")
+        assert _is_transient_error(error) is True
+
+    def test_detects_requests_connection_error_type(self):
+        """Test requests.exceptions.ConnectionError is detected by type."""
+        error = requests.exceptions.ConnectionError("Failed to connect")
+        assert _is_transient_error(error) is True
+
+    def test_detects_requests_timeout_type(self):
+        """Test requests.exceptions.Timeout is detected by type."""
+        error = requests.exceptions.Timeout("Request timed out")
+        assert _is_transient_error(error) is True
+
+    def test_detects_requests_read_timeout_type(self):
+        """Test requests.exceptions.ReadTimeout is detected by type."""
+        error = requests.exceptions.ReadTimeout("Read timed out")
+        assert _is_transient_error(error) is True
+
+    def test_detects_requests_connect_timeout_type(self):
+        """Test requests.exceptions.ConnectTimeout is detected by type."""
+        error = requests.exceptions.ConnectTimeout("Connect timed out")
+        assert _is_transient_error(error) is True
+
+    def test_detects_http_error_502(self):
+        """Test requests.exceptions.HTTPError with 502 status is detected."""
+        mock_response = Mock()
+        mock_response.status_code = 502
+        error = requests.exceptions.HTTPError(response=mock_response)
+        assert _is_transient_error(error) is True
+
+    def test_detects_http_error_503(self):
+        """Test requests.exceptions.HTTPError with 503 status is detected."""
+        mock_response = Mock()
+        mock_response.status_code = 503
+        error = requests.exceptions.HTTPError(response=mock_response)
+        assert _is_transient_error(error) is True
+
+    def test_detects_http_error_504(self):
+        """Test requests.exceptions.HTTPError with 504 status is detected."""
+        mock_response = Mock()
+        mock_response.status_code = 504
+        error = requests.exceptions.HTTPError(response=mock_response)
+        assert _is_transient_error(error) is True
+
+    def test_http_error_400_not_transient(self):
+        """Test requests.exceptions.HTTPError with 400 status is not transient."""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        error = requests.exceptions.HTTPError(response=mock_response)
+        assert _is_transient_error(error) is False
+
+    def test_http_error_401_not_transient(self):
+        """Test requests.exceptions.HTTPError with 401 status is not transient."""
+        mock_response = Mock()
+        mock_response.status_code = 401
+        error = requests.exceptions.HTTPError(response=mock_response)
+        assert _is_transient_error(error) is False
+
+    def test_http_error_404_not_transient(self):
+        """Test requests.exceptions.HTTPError with 404 status is not transient."""
+        mock_response = Mock()
+        mock_response.status_code = 404
+        error = requests.exceptions.HTTPError(response=mock_response)
+        assert _is_transient_error(error) is False
+
+    def test_http_error_500_not_transient(self):
+        """Test requests.exceptions.HTTPError with 500 status is not transient (only 502-504)."""
+        mock_response = Mock()
+        mock_response.status_code = 500
+        error = requests.exceptions.HTTPError(response=mock_response)
+        assert _is_transient_error(error) is False
+
+    def test_http_error_no_response_not_transient(self):
+        """Test HTTPError without response attribute is not transient by type alone."""
+        error = requests.exceptions.HTTPError("HTTP error without response")
+        # No response attribute with status_code, so falls through to string matching
+        # "HTTP error without response" doesn't match transient patterns
+        assert _is_transient_error(error) is False
 
 
 class TestExecuteWithRetry:
@@ -160,10 +263,12 @@ class TestExecuteWithRetry:
         def always_fail():
             raise Exception("503 Service Unavailable")
 
-        with patch("main.UPDATE_MAX_RETRIES", 3), patch("main.UPDATE_BASE_DELAY", 1.0), patch(
-            "main.UPDATE_MAX_DELAY", 100.0
-        ), patch("main.time.sleep", side_effect=capture_sleep), patch(
-            "main.random.uniform", return_value=0
+        with (
+            patch("main.UPDATE_MAX_RETRIES", 3),
+            patch("main.UPDATE_BASE_DELAY", 1.0),
+            patch("main.UPDATE_MAX_DELAY", 100.0),
+            patch("main.time.sleep", side_effect=capture_sleep),
+            patch("main.random.uniform", return_value=0),
         ):  # No jitter for predictable test
             _execute_with_retry(always_fail, "test_func")
 
@@ -184,10 +289,12 @@ class TestExecuteWithRetry:
         def always_fail():
             raise Exception("503 Service Unavailable")
 
-        with patch("main.UPDATE_MAX_RETRIES", 5), patch("main.UPDATE_BASE_DELAY", 10.0), patch(
-            "main.UPDATE_MAX_DELAY", 30.0
-        ), patch("main.time.sleep", side_effect=capture_sleep), patch(
-            "main.random.uniform", return_value=0
+        with (
+            patch("main.UPDATE_MAX_RETRIES", 5),
+            patch("main.UPDATE_BASE_DELAY", 10.0),
+            patch("main.UPDATE_MAX_DELAY", 30.0),
+            patch("main.time.sleep", side_effect=capture_sleep),
+            patch("main.random.uniform", return_value=0),
         ):
             _execute_with_retry(always_fail, "test_func")
 
@@ -212,10 +319,12 @@ class TestExecuteWithRetry:
         # Use different random values for each call
         random_values = [0.1, 0.2, 0.15]
 
-        with patch("main.UPDATE_MAX_RETRIES", 3), patch("main.UPDATE_BASE_DELAY", 1.0), patch(
-            "main.UPDATE_MAX_DELAY", 100.0
-        ), patch("main.time.sleep", side_effect=capture_sleep), patch(
-            "main.random.uniform", side_effect=random_values
+        with (
+            patch("main.UPDATE_MAX_RETRIES", 3),
+            patch("main.UPDATE_BASE_DELAY", 1.0),
+            patch("main.UPDATE_MAX_DELAY", 100.0),
+            patch("main.time.sleep", side_effect=capture_sleep),
+            patch("main.random.uniform", side_effect=random_values),
         ):
             _execute_with_retry(always_fail, "test_func")
 
@@ -253,9 +362,11 @@ class TestExecuteWithRetry:
         def always_fail():
             raise Exception("503 Service Unavailable")
 
-        with patch("main.UPDATE_MAX_RETRIES", 1), patch("main.time.sleep"), patch(
-            "main.logger"
-        ) as mock_logger:
+        with (
+            patch("main.UPDATE_MAX_RETRIES", 1),
+            patch("main.time.sleep"),
+            patch("main.logger") as mock_logger,
+        ):
             _execute_with_retry(always_fail, "test_func")
 
         # Should have logged an error
@@ -263,10 +374,11 @@ class TestExecuteWithRetry:
 
     def test_different_transient_errors(self):
         """Test retry works with different types of transient errors."""
+        # Use actual exception types for type-based detection
         errors = [
-            Exception("502 Bad Gateway"),
-            Exception("Connection refused"),
-            Exception("timeout"),
+            Exception("502 Bad Gateway"),  # String-based (502)
+            ConnectionError("Connection failed"),  # Type-based
+            TimeoutError("Operation timed out"),  # Type-based
         ]
         call_count = [0]
 

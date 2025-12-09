@@ -4,11 +4,85 @@ import asyncio  # Async support
 import atexit  # Cleanup handlers
 from concurrent.futures import ThreadPoolExecutor
 import functools  # For partial function binding
-from typing import Optional
+from typing import Optional, Dict, Tuple
 import logging  # Logging support
+import threading  # For thread-safe cache
+import time  # For cache TTL
 
 # Module logger
 logger = logging.getLogger("poly_maker.polymarket_client")
+
+# =============================================================================
+# Balance Cache Configuration
+# =============================================================================
+# Minimum position size to consider valid for selling (avoids dust orders)
+SELL_DUST_THRESHOLD = float(os.getenv("SELL_DUST_THRESHOLD", "1.0"))
+
+# Time-to-live for cached balance values in seconds
+BALANCE_CACHE_TTL = float(os.getenv("BALANCE_CACHE_TTL", "2.0"))
+
+
+class BalanceCache:
+    """
+    Thread-safe cache for token balances with TTL expiration.
+
+    Reduces redundant blockchain calls when multiple sell orders are
+    processed in quick succession for the same token.
+    """
+
+    def __init__(self, ttl_seconds: float = BALANCE_CACHE_TTL):
+        self._cache: Dict[str, Tuple[float, float]] = {}  # token -> (balance, timestamp)
+        self._lock = threading.Lock()
+        self._ttl = ttl_seconds
+
+    def get(self, token_id: str) -> Optional[float]:
+        """
+        Get cached balance if not expired.
+
+        Args:
+            token_id: Token ID to look up
+
+        Returns:
+            Cached balance or None if not found/expired
+        """
+        with self._lock:
+            if token_id in self._cache:
+                balance, timestamp = self._cache[token_id]
+                if time.monotonic() - timestamp < self._ttl:
+                    return balance
+                # Expired - remove from cache
+                del self._cache[token_id]
+        return None
+
+    def set(self, token_id: str, balance: float) -> None:
+        """
+        Store balance in cache with current timestamp.
+
+        Args:
+            token_id: Token ID to cache
+            balance: Balance value to store
+        """
+        with self._lock:
+            self._cache[token_id] = (balance, time.monotonic())
+
+    def invalidate(self, token_id: str) -> None:
+        """
+        Remove a specific token from cache.
+
+        Args:
+            token_id: Token ID to invalidate
+        """
+        with self._lock:
+            self._cache.pop(token_id, None)
+
+    def clear(self) -> None:
+        """Clear all cached entries."""
+        with self._lock:
+            self._cache.clear()
+
+
+# Global balance cache instance
+_balance_cache = BalanceCache()
 
 # Polymarket API client libraries
 from py_clob_client.client import ClobClient
@@ -144,15 +218,22 @@ class PolymarketClient:
         # This prevents "not enough balance / allowance" errors when in-memory
         # position state diverges from actual blockchain balance
         if action == "SELL":
+            token_id_str = str(marketId)
             try:
-                actual_balance = self.get_raw_position(str(marketId)) / 1e6
+                # Check cache first to avoid redundant blockchain calls
+                actual_balance = _balance_cache.get(token_id_str)
+                if actual_balance is None:
+                    actual_balance = self.get_raw_position(token_id_str) / 1e6
+                    _balance_cache.set(token_id_str, actual_balance)
+
                 if actual_balance < size:
-                    if actual_balance < 1:  # Below dust threshold, skip entirely
+                    if actual_balance < SELL_DUST_THRESHOLD:
                         logger.warning(
-                            "Skipping sell order: insufficient balance (%.2f < %.2f) for %s",
+                            "Skipping sell order: insufficient balance (%.2f < %.2f, dust=%.1f) for %s",
                             actual_balance,
                             size,
-                            str(marketId)[:20],
+                            SELL_DUST_THRESHOLD,
+                            token_id_str[:20],
                         )
                         return {}  # Return empty dict (same as error case)
                     else:
@@ -161,7 +242,7 @@ class PolymarketClient:
                             "Adjusting sell size from %.2f to actual balance %.2f for %s",
                             size,
                             actual_balance,
-                            str(marketId)[:20],
+                            token_id_str[:20],
                         )
                         size = actual_balance
             except Exception as e:

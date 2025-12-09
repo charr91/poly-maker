@@ -5,6 +5,9 @@ import asyncio  # Asynchronous I/O
 import logging  # Logging
 import threading  # Thread management
 import random  # For jitter in retry logic
+from typing import Optional  # Type hints
+
+import requests.exceptions  # For type-based error detection
 
 from poly_data.polymarket_client import PolymarketClient
 from poly_data.data_utils import (
@@ -79,12 +82,15 @@ def _is_transient_error(exception: Exception) -> bool:
     """
     Check if an exception is a transient error that should be retried.
 
+    Uses both type-based checking (more reliable) and string-based fallback
+    for comprehensive error detection.
+
     Transient errors include:
-    - 502 Bad Gateway
-    - 503 Service Unavailable
-    - 504 Gateway Timeout
-    - Connection errors
-    - Timeout errors
+    - HTTP 502 Bad Gateway
+    - HTTP 503 Service Unavailable
+    - HTTP 504 Gateway Timeout
+    - Connection errors (ConnectionError, ConnectionRefusedError, etc.)
+    - Timeout errors (TimeoutError, ReadTimeout, ConnectTimeout)
 
     Args:
         exception: The exception to check
@@ -92,6 +98,31 @@ def _is_transient_error(exception: Exception) -> bool:
     Returns:
         True if the error is transient and should be retried
     """
+    # Type-based checks (most reliable)
+    transient_exception_types = (
+        ConnectionError,
+        ConnectionRefusedError,
+        ConnectionResetError,
+        TimeoutError,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ReadTimeout,
+        requests.exceptions.ConnectTimeout,
+    )
+
+    if isinstance(exception, transient_exception_types):
+        return True
+
+    # Check HTTP status codes for requests.HTTPError
+    if isinstance(exception, requests.exceptions.HTTPError):
+        response = getattr(exception, "response", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+            if status_code in (502, 503, 504):
+                return True
+
+    # String-based fallback for errors that don't match known types
+    # (e.g., wrapped exceptions, custom error messages)
     error_str = str(exception).lower()
     transient_indicators = [
         "503",
@@ -100,8 +131,6 @@ def _is_transient_error(exception: Exception) -> bool:
         "service unavailable",
         "bad gateway",
         "gateway timeout",
-        "connection",
-        "timeout",
         "temporarily unavailable",
     ]
     return any(indicator in error_str for indicator in transient_indicators)
@@ -120,12 +149,17 @@ def _execute_with_retry(func, func_name: str) -> bool:
     Returns:
         True if successful, False if failed after all retries
     """
+    last_exception: Optional[Exception] = None
+
     for attempt in range(UPDATE_MAX_RETRIES + 1):
         try:
             func()
             return True
         except Exception as e:
-            if _is_transient_error(e) and attempt < UPDATE_MAX_RETRIES:
+            last_exception = e
+            is_last_attempt = attempt >= UPDATE_MAX_RETRIES
+
+            if _is_transient_error(e) and not is_last_attempt:
                 # Calculate delay with exponential backoff and jitter
                 delay = min(UPDATE_BASE_DELAY * (2**attempt), UPDATE_MAX_DELAY)
                 jitter = delay * random.uniform(0, 0.25)
@@ -141,10 +175,16 @@ def _execute_with_retry(func, func_name: str) -> bool:
                 )
                 time.sleep(total_delay)
             else:
-                # Non-transient error or max retries exceeded
+                # Non-transient error or max retries exceeded - fail immediately
                 logger.error("%s failed: %s", func_name, e)
                 logger.debug("Full traceback:", exc_info=True)
                 return False
+
+    # This should never be reached due to the return statements above,
+    # but provides a safety net and satisfies static analysis
+    logger.error(
+        "%s failed after %d attempts: %s", func_name, UPDATE_MAX_RETRIES + 1, last_exception
+    )
     return False
 
 
