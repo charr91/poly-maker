@@ -99,6 +99,10 @@ async def main():
     """
     Main application entry point. Initializes client, data, and manages websocket connections.
     """
+    # Store event loop reference FIRST - before any code that might need it
+    # This allows background threads to schedule async tasks on the main event loop
+    global_state.event_loop = asyncio.get_running_loop()
+
     # Initialize client
     global_state.client = PolymarketClient()
 
@@ -115,10 +119,6 @@ async def main():
         len(global_state.positions),
         len(global_state.orders),
     )
-
-    # Store event loop reference for thread-safe async scheduling
-    # This allows the background thread to schedule async tasks on the main event loop
-    global_state.event_loop = asyncio.get_running_loop()
 
     # Start background update thread
     update_thread = threading.Thread(target=update_periodically, daemon=True)
