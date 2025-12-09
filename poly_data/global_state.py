@@ -47,6 +47,12 @@ orders = {}
 # Format: {token_id: {'size': float, 'avgPrice': float}}
 positions = {}
 
+# ============ Async Coordination ============
+
+# Event loop reference for thread-safe async scheduling from background threads
+# Set by main.py at startup, used by _schedule_pending_removals()
+event_loop = None
+
 # ============ Cleanup State ============
 
 # Markets pending removal (grace period before cleanup)

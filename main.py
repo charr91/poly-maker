@@ -116,6 +116,10 @@ async def main():
         len(global_state.orders),
     )
 
+    # Store event loop reference for thread-safe async scheduling
+    # This allows the background thread to schedule async tasks on the main event loop
+    global_state.event_loop = asyncio.get_running_loop()
+
     # Start background update thread
     update_thread = threading.Thread(target=update_periodically, daemon=True)
     update_thread.start()

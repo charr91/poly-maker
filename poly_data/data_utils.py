@@ -396,29 +396,43 @@ async def close_positions(tokens: list, condition_id: str, neg_risk: bool) -> No
             except Exception as e:
                 logger.warning("Merge failed during cleanup for %s: %s", condition_id[:16], e)
 
+    # Get order book data once (contains YES token bids/asks)
+    order_book = global_state.all_data.get(condition_id, {})
+    yes_bids = order_book.get("bids", {})
+    yes_asks = order_book.get("asks", {})
+
     # Close remaining positions
     for token_str, size, avg_price in positions:
         if size <= 0:
             continue
 
-        # Get best bid from order book
-        order_book = global_state.all_data.get(condition_id, {})
-        bids = order_book.get("bids", {})
-        best_bid = max(bids.keys()) if bids else None
+        # Determine if this is token1 (YES) or token2 (NO)
+        # tokens list is always [token1, token2] where token1=YES, token2=NO
+        is_token2 = len(tokens) > 1 and token_str == str(tokens[1])
+
+        # Get best bid based on token type
+        # YES: use YES bids directly
+        # NO: best_bid = 1 - YES_best_ask (price transformation for complementary outcome)
+        if is_token2:
+            # For NO token: best_bid = 1 - YES_best_ask
+            best_bid = (1 - min(yes_asks.keys())) if yes_asks else None
+        else:
+            # For YES token: use YES best_bid directly
+            best_bid = max(yes_bids.keys()) if yes_bids else None
 
         # Determine sell strategy based on P&L
         if CONSTANTS.CLEANUP_FORCE_MARKET_SELL:
-            # Force market sell regardless of P&L
+            # Force sell at best bid regardless of P&L
             if best_bid:
                 sell_price = best_bid
-                order_type = "market"
+                order_type = "limit (forced)"
             else:
                 sell_price = avg_price
                 order_type = "limit (no bids)"
         elif best_bid is not None and best_bid >= avg_price:
-            # In profit - sell at market
+            # In profit - sell at best bid
             sell_price = best_bid
-            order_type = "market (in profit)"
+            order_type = "limit (in profit)"
         else:
             # Underwater or no bids - place limit at break-even
             sell_price = avg_price
@@ -502,14 +516,28 @@ def cleanup_market_state(condition_id: str, tokens: list) -> None:
 
 
 def _schedule_pending_removals() -> None:
-    """Schedule async processing of pending removals."""
+    """
+    Schedule async processing of pending removals (thread-safe).
+
+    This function is called from a background thread (update_periodically),
+    so we use loop.call_soon_threadsafe() to schedule the async task on
+    the main event loop.
+    """
+    loop = getattr(global_state, "event_loop", None)
+
+    if loop is None:
+        logger.warning("No event loop available, skipping pending removal processing")
+        return
+
+    if loop.is_closed():
+        logger.warning("Event loop is closed, skipping pending removal processing")
+        return
+
     try:
-        loop = asyncio.get_running_loop()
-        asyncio.create_task(process_pending_removals())
-    except RuntimeError:
-        # No running event loop - this shouldn't happen in normal operation
-        # but handle gracefully for testing
-        logger.debug("No running event loop, skipping pending removal processing")
+        # Thread-safe way to schedule async task from background thread
+        loop.call_soon_threadsafe(lambda: asyncio.create_task(process_pending_removals()))
+    except RuntimeError as e:
+        logger.warning("Failed to schedule pending removals: %s", e)
 
 
 def update_markets():

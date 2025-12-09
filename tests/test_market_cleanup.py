@@ -598,3 +598,249 @@ class TestWaitForPerformingTrades:
             assert elapsed >= 0.2
             # Should have been force-cleaned
             assert "token1_buy" not in mock_gs.performing
+
+
+class TestThreadSafeScheduling:
+    """Tests for thread-safe scheduling of pending removals."""
+
+    @pytest.mark.asyncio
+    async def test_schedule_pending_removals_uses_event_loop(self):
+        """Test that _schedule_pending_removals uses stored event loop."""
+        loop = asyncio.get_running_loop()
+
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.event_loop = loop
+            mock_gs.pending_removal = {"market1": {"timestamp": 0}}
+
+            # Track if create_task was called
+            task_created = False
+            original_create_task = asyncio.create_task
+
+            def mock_create_task(coro):
+                nonlocal task_created
+                task_created = True
+                # Cancel the coroutine to avoid actually running cleanup
+                coro.close()
+                return MagicMock()
+
+            with patch("asyncio.create_task", side_effect=mock_create_task):
+                data_utils._schedule_pending_removals()
+
+                # Give event loop time to process the call_soon_threadsafe
+                await asyncio.sleep(0.05)
+
+            assert task_created
+
+    def test_schedule_pending_removals_skips_when_no_loop(self):
+        """Test that _schedule_pending_removals skips when event_loop is None."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.event_loop = None
+
+            with patch("asyncio.create_task") as mock_create:
+                # Should not raise, should skip gracefully
+                data_utils._schedule_pending_removals()
+
+                # Should not have tried to create task
+                mock_create.assert_not_called()
+
+    def test_schedule_pending_removals_skips_when_loop_closed(self):
+        """Test that _schedule_pending_removals skips when event loop is closed."""
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = True
+
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.event_loop = mock_loop
+
+            with patch("asyncio.create_task") as mock_create:
+                # Should not raise, should skip gracefully
+                data_utils._schedule_pending_removals()
+
+                # Should not have tried to schedule
+                mock_loop.call_soon_threadsafe.assert_not_called()
+                mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_schedule_pending_removals_handles_runtime_error(self):
+        """Test that _schedule_pending_removals handles RuntimeError gracefully."""
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        mock_loop.call_soon_threadsafe.side_effect = RuntimeError("Loop stopped")
+
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.event_loop = mock_loop
+
+            # Should not raise, should handle gracefully
+            data_utils._schedule_pending_removals()
+
+
+class TestNoTokenPriceTransformation:
+    """Tests for NO token price transformation in close_positions."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock client with async methods."""
+        client = MagicMock()
+        client.create_order_async = AsyncMock()
+        client.merge_positions_async = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_no_token_in_profit_uses_transformed_price(self, mock_client):
+        """Test that in-profit NO token positions use correct transformed price."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "CONSTANTS") as mock_constants,
+        ):
+            mock_gs.client = mock_client
+            mock_constants.CLEANUP_FORCE_MARKET_SELL = False
+            mock_constants.MIN_MERGE_SIZE = 20
+
+            token1 = "yes_token"
+            token2 = "no_token"
+            condition_id = "market1"
+
+            # NO position bought at 0.30
+            # YES order book: best_bid=0.60, best_ask=0.65
+            # NO best_bid = 1 - 0.65 = 0.35 > 0.30 (in profit!)
+            mock_gs.positions = {token2: {"size": 100, "avgPrice": 0.30}}
+            mock_gs.all_data = {condition_id: {"bids": {0.60: 1000}, "asks": {0.65: 1000}}}
+
+            await data_utils.close_positions([token1, token2], condition_id, False)
+
+            # Should sell at NO best_bid (0.35 = 1 - 0.65)
+            mock_client.create_order_async.assert_called_once_with(
+                token2, "SELL", 0.35, 100, False
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_token_underwater_uses_breakeven(self, mock_client):
+        """Test that underwater NO token positions use break-even price."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "CONSTANTS") as mock_constants,
+        ):
+            mock_gs.client = mock_client
+            mock_constants.CLEANUP_FORCE_MARKET_SELL = False
+            mock_constants.MIN_MERGE_SIZE = 20
+
+            token1 = "yes_token"
+            token2 = "no_token"
+            condition_id = "market1"
+
+            # NO position bought at 0.50
+            # YES order book: best_bid=0.60, best_ask=0.65
+            # NO best_bid = 1 - 0.65 = 0.35 < 0.50 (underwater!)
+            mock_gs.positions = {token2: {"size": 100, "avgPrice": 0.50}}
+            mock_gs.all_data = {condition_id: {"bids": {0.60: 1000}, "asks": {0.65: 1000}}}
+
+            await data_utils.close_positions([token1, token2], condition_id, False)
+
+            # Should sell at break-even (0.50), not the transformed price (0.35)
+            mock_client.create_order_async.assert_called_once_with(
+                token2, "SELL", 0.50, 100, False
+            )
+
+    @pytest.mark.asyncio
+    async def test_yes_token_in_profit_uses_best_bid(self, mock_client):
+        """Test that in-profit YES token positions sell at best_bid."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "CONSTANTS") as mock_constants,
+        ):
+            mock_gs.client = mock_client
+            mock_constants.CLEANUP_FORCE_MARKET_SELL = False
+            mock_constants.MIN_MERGE_SIZE = 20
+
+            token1 = "yes_token"
+            condition_id = "market1"
+
+            # YES position bought at 0.40, current best_bid=0.50 (in profit)
+            mock_gs.positions = {token1: {"size": 100, "avgPrice": 0.40}}
+            mock_gs.all_data = {condition_id: {"bids": {0.50: 1000}, "asks": {0.55: 1000}}}
+
+            await data_utils.close_positions([token1], condition_id, False)
+
+            # Should sell at best_bid (0.50)
+            mock_client.create_order_async.assert_called_once_with(
+                token1, "SELL", 0.50, 100, False
+            )
+
+    @pytest.mark.asyncio
+    async def test_yes_token_underwater_uses_breakeven(self, mock_client):
+        """Test that underwater YES token positions use break-even price."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "CONSTANTS") as mock_constants,
+        ):
+            mock_gs.client = mock_client
+            mock_constants.CLEANUP_FORCE_MARKET_SELL = False
+            mock_constants.MIN_MERGE_SIZE = 20
+
+            token1 = "yes_token"
+            condition_id = "market1"
+
+            # YES position bought at 0.60, current best_bid=0.40 (underwater)
+            mock_gs.positions = {token1: {"size": 100, "avgPrice": 0.60}}
+            mock_gs.all_data = {condition_id: {"bids": {0.40: 1000}, "asks": {0.45: 1000}}}
+
+            await data_utils.close_positions([token1], condition_id, False)
+
+            # Should sell at break-even (0.60)
+            mock_client.create_order_async.assert_called_once_with(
+                token1, "SELL", 0.60, 100, False
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_token_with_empty_yes_asks_uses_breakeven(self, mock_client):
+        """Test NO token falls back to break-even when no YES asks available."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "CONSTANTS") as mock_constants,
+        ):
+            mock_gs.client = mock_client
+            mock_constants.CLEANUP_FORCE_MARKET_SELL = False
+            mock_constants.MIN_MERGE_SIZE = 20
+
+            token1 = "yes_token"
+            token2 = "no_token"
+            condition_id = "market1"
+
+            mock_gs.positions = {token2: {"size": 100, "avgPrice": 0.40}}
+            mock_gs.all_data = {condition_id: {"bids": {0.50: 1000}, "asks": {}}}  # No asks
+
+            await data_utils.close_positions([token1, token2], condition_id, False)
+
+            # Should fall back to break-even (0.40)
+            mock_client.create_order_async.assert_called_once_with(
+                token2, "SELL", 0.40, 100, False
+            )
+
+    @pytest.mark.asyncio
+    async def test_force_market_sell_uses_transformed_price_for_no_token(self, mock_client):
+        """Test FORCE_MARKET_SELL uses transformed price for NO tokens."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "CONSTANTS") as mock_constants,
+        ):
+            mock_gs.client = mock_client
+            mock_constants.CLEANUP_FORCE_MARKET_SELL = True
+            mock_constants.MIN_MERGE_SIZE = 20
+
+            token1 = "yes_token"
+            token2 = "no_token"
+            condition_id = "market1"
+
+            # NO position underwater but FORCE enabled
+            mock_gs.positions = {token2: {"size": 100, "avgPrice": 0.50}}
+            mock_gs.all_data = {condition_id: {"bids": {0.60: 1000}, "asks": {0.70: 1000}}}
+
+            await data_utils.close_positions([token1, token2], condition_id, False)
+
+            # Should sell at transformed price (1 - 0.70 = 0.30) even though underwater
+            mock_client.create_order_async.assert_called_once()
+            call_args = mock_client.create_order_async.call_args[0]
+            assert call_args[0] == token2
+            assert call_args[1] == "SELL"
+            assert call_args[2] == pytest.approx(0.30, abs=1e-9)  # Handle floating-point precision
+            assert call_args[3] == 100
+            assert call_args[4] is False
