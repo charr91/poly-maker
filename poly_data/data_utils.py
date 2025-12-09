@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import time
@@ -272,8 +273,17 @@ async def cleanup_orphaned_positions() -> None:
             continue
         processed_conditions.add(condition_id)
 
-        # clobTokenIds is a list of token ID strings from Gamma API
-        tokens = [str(t) for t in market_info.get("clobTokenIds", [])]
+        # clobTokenIds is stringified JSON from Gamma API - parse it
+        clob_token_ids_raw = market_info.get("clobTokenIds", "[]")
+        if isinstance(clob_token_ids_raw, str):
+            try:
+                clob_token_ids = json.loads(clob_token_ids_raw)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse clobTokenIds: %s", clob_token_ids_raw[:50])
+                clob_token_ids = []
+        else:
+            clob_token_ids = clob_token_ids_raw  # Already a list (defensive)
+        tokens = [str(t) for t in clob_token_ids]
 
         neg_risk = market_info.get("negRisk", False)
         question = market_info.get("question", "Unknown")

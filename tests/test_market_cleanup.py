@@ -981,7 +981,7 @@ class TestCleanupOrphanedPositions:
                 "conditionId": "cond123",
                 "question": "Test market?",
                 "negRisk": False,
-                "clobTokenIds": ["orphan_token", "token2"],
+                "clobTokenIds": '["orphan_token", "token2"]',
             }
 
             await data_utils.cleanup_orphaned_positions()
@@ -1004,7 +1004,7 @@ class TestCleanupOrphanedPositions:
                 "conditionId": "cond123",
                 "question": "Will it rain?",
                 "negRisk": True,
-                "clobTokenIds": ["orphan_token", "other_token"],
+                "clobTokenIds": '["orphan_token", "other_token"]',
             }
 
             await data_utils.cleanup_orphaned_positions()
@@ -1033,7 +1033,7 @@ class TestCleanupOrphanedPositions:
                     "conditionId": "c2",
                     "question": "Q2",
                     "negRisk": False,
-                    "clobTokenIds": ["token2"],
+                    "clobTokenIds": '["token2"]',
                 },
             ]
 
@@ -1057,7 +1057,7 @@ class TestCleanupOrphanedPositions:
                 "conditionId": "same_market",
                 "question": "Same market",
                 "negRisk": False,
-                "clobTokenIds": ["yes_token", "no_token"],
+                "clobTokenIds": '["yes_token", "no_token"]',
             }
 
             await data_utils.cleanup_orphaned_positions()
@@ -1083,13 +1083,13 @@ class TestCleanupOrphanedPositions:
                     "conditionId": "c1",
                     "question": "Q1",
                     "negRisk": False,
-                    "clobTokenIds": ["token1"],
+                    "clobTokenIds": '["token1"]',
                 },
                 {
                     "conditionId": "c2",
                     "question": "Q2",
                     "negRisk": False,
-                    "clobTokenIds": ["token2"],
+                    "clobTokenIds": '["token2"]',
                 },
             ]
             # First cleanup fails, second should still run
