@@ -7,6 +7,8 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: polybot-main
+    # Run as host user to avoid permission issues with mounted volumes
+    user: "${UID:-1000}:${GID:-1000}"
     environment:
       - PK=${PK}
       - BROWSER_ADDRESS=${BROWSER_ADDRESS}

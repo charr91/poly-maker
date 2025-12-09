@@ -185,6 +185,7 @@ class PolymarketClient:
         # Store key contract addresses
         self.addresses = {
             "neg_risk_adapter": "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",
+            "neg_risk_ctf_exchange": "0xC5d563A36AE78145C45a50134d48A1215220f80a",
             "collateral": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
             "conditional_tokens": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
         }
@@ -196,6 +197,11 @@ class PolymarketClient:
 
         self.conditional_tokens = web3.eth.contract(
             address=self.addresses["conditional_tokens"], abi=ConditionalTokenABI
+        )
+
+        # NegRiskCtfExchange uses same ERC1155 balanceOf interface as ConditionalTokens
+        self.neg_risk_ctf_exchange = web3.eth.contract(
+            address=self.addresses["neg_risk_ctf_exchange"], abi=ConditionalTokenABI
         )
 
         self.web3 = web3
@@ -219,12 +225,14 @@ class PolymarketClient:
         # position state diverges from actual blockchain balance
         if action == "SELL":
             token_id_str = str(marketId)
+            # Include neg_risk in cache key to avoid returning wrong balance
+            cache_key = f"{token_id_str}_{neg_risk}"
             try:
                 # Check cache first to avoid redundant blockchain calls
-                actual_balance = _balance_cache.get(token_id_str)
+                actual_balance = _balance_cache.get(cache_key)
                 if actual_balance is None:
-                    actual_balance = self.get_raw_position(token_id_str) / 1e6
-                    _balance_cache.set(token_id_str, actual_balance)
+                    actual_balance = self.get_raw_position(token_id_str, neg_risk) / 1e6
+                    _balance_cache.set(cache_key, actual_balance)
 
                 if actual_balance < size:
                     if actual_balance < SELL_DUST_THRESHOLD:
@@ -386,19 +394,21 @@ class PolymarketClient:
         )
         return pd.DataFrame(res.json())
 
-    def get_raw_position(self, tokenId):
+    def get_raw_position(self, tokenId, neg_risk=False):
         """
         Get the raw token balance for a specific market outcome token.
 
         Args:
             tokenId (int): Token ID to query
+            neg_risk (bool): Whether this is a negative risk market. Neg risk markets
+                            store balances in the NegRiskCtfExchange contract, while
+                            regular markets use the ConditionalTokens contract.
 
         Returns:
             int: Raw token amount (before decimal conversion)
         """
-        return int(
-            self.conditional_tokens.functions.balanceOf(self.browser_wallet, int(tokenId)).call()
-        )
+        contract = self.neg_risk_ctf_exchange if neg_risk else self.conditional_tokens
+        return int(contract.functions.balanceOf(self.browser_wallet, int(tokenId)).call())
 
     def get_position(self, tokenId):
         """

@@ -38,6 +38,7 @@ class TestCreateOrderBalanceValidation:
                         client.client = MagicMock()
                         client.browser_wallet = "0x" + "2" * 40
                         client.conditional_tokens = MagicMock()
+                        client.neg_risk_ctf_exchange = MagicMock()
 
                         # Mock rate limiter
                         with patch(
@@ -200,10 +201,18 @@ class TestCreateOrderBalanceValidation:
         assert result == {"orderID": "test123"}
 
     def test_sell_order_with_neg_risk_true(self, mock_client):
-        """Test balance validation works with neg_risk=True."""
-        # Mock balance of 50 (50_000_000 raw)
-        mock_client.conditional_tokens.functions.balanceOf.return_value.call.return_value = (
+        """Test balance validation works with neg_risk=True.
+
+        For neg_risk markets, balance is checked from neg_risk_ctf_exchange contract,
+        not the regular conditional_tokens contract.
+        """
+        # Mock balance of 50 from neg_risk_ctf_exchange (50_000_000 raw)
+        mock_client.neg_risk_ctf_exchange.functions.balanceOf.return_value.call.return_value = (
             50_000_000
+        )
+        # Ensure conditional_tokens returns different value to verify correct contract is used
+        mock_client.conditional_tokens.functions.balanceOf.return_value.call.return_value = (
+            200_000_000
         )
 
         mock_client.client.create_order.return_value = MagicMock()
@@ -216,11 +225,11 @@ class TestCreateOrderBalanceValidation:
                 marketId="12345678901234567890",
                 action="SELL",
                 price=0.55,
-                size=100,  # Have 50, requesting 100
+                size=100,  # Have 50 in neg_risk, requesting 100
                 neg_risk=True,
             )
 
-        # Verify size was adjusted
+        # Verify size was adjusted to 50 (from neg_risk_ctf_exchange, not 200 from conditional_tokens)
         call_args = mock_client.client.create_order.call_args
         order_args = call_args[0][0]
         assert order_args.size == 50.0

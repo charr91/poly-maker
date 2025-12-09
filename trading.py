@@ -418,7 +418,10 @@ async def perform_trade(market):
                             await client.cancel_all_market_async(market)
 
                             # Save risk details to file
-                            open(fname, "w").write(json.dumps(risk_details))
+                            try:
+                                open(fname, "w").write(json.dumps(risk_details))
+                            except PermissionError:
+                                print(f"Warning: Could not persist risk-off state to {fname}")
                             continue
 
                     # ------- BUY ORDER LOGIC -------
