@@ -708,9 +708,7 @@ class TestNoTokenPriceTransformation:
             await data_utils.close_positions([token1, token2], condition_id, False)
 
             # Should sell at NO best_bid (0.35 = 1 - 0.65)
-            mock_client.create_order_async.assert_called_once_with(
-                token2, "SELL", 0.35, 100, False
-            )
+            mock_client.create_order_async.assert_called_once_with(token2, "SELL", 0.35, 100, False)
 
     @pytest.mark.asyncio
     async def test_no_token_underwater_uses_breakeven(self, mock_client):
@@ -736,9 +734,7 @@ class TestNoTokenPriceTransformation:
             await data_utils.close_positions([token1, token2], condition_id, False)
 
             # Should sell at break-even (0.50), not the transformed price (0.35)
-            mock_client.create_order_async.assert_called_once_with(
-                token2, "SELL", 0.50, 100, False
-            )
+            mock_client.create_order_async.assert_called_once_with(token2, "SELL", 0.50, 100, False)
 
     @pytest.mark.asyncio
     async def test_yes_token_in_profit_uses_best_bid(self, mock_client):
@@ -761,9 +757,7 @@ class TestNoTokenPriceTransformation:
             await data_utils.close_positions([token1], condition_id, False)
 
             # Should sell at best_bid (0.50)
-            mock_client.create_order_async.assert_called_once_with(
-                token1, "SELL", 0.50, 100, False
-            )
+            mock_client.create_order_async.assert_called_once_with(token1, "SELL", 0.50, 100, False)
 
     @pytest.mark.asyncio
     async def test_yes_token_underwater_uses_breakeven(self, mock_client):
@@ -786,9 +780,7 @@ class TestNoTokenPriceTransformation:
             await data_utils.close_positions([token1], condition_id, False)
 
             # Should sell at break-even (0.60)
-            mock_client.create_order_async.assert_called_once_with(
-                token1, "SELL", 0.60, 100, False
-            )
+            mock_client.create_order_async.assert_called_once_with(token1, "SELL", 0.60, 100, False)
 
     @pytest.mark.asyncio
     async def test_no_token_with_empty_yes_asks_uses_breakeven(self, mock_client):
@@ -811,9 +803,7 @@ class TestNoTokenPriceTransformation:
             await data_utils.close_positions([token1, token2], condition_id, False)
 
             # Should fall back to break-even (0.40)
-            mock_client.create_order_async.assert_called_once_with(
-                token2, "SELL", 0.40, 100, False
-            )
+            mock_client.create_order_async.assert_called_once_with(token2, "SELL", 0.40, 100, False)
 
     @pytest.mark.asyncio
     async def test_force_market_sell_uses_transformed_price_for_no_token(self, mock_client):
@@ -852,9 +842,7 @@ class TestDetectOrphanedTokens:
     def test_no_orphans_when_all_tokens_in_sheet(self):
         """Test no orphans returned when all positions/orders match sheet tokens."""
         with patch.object(data_utils, "global_state") as mock_gs:
-            mock_gs.df = _create_sample_df(
-                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
-            )
+            mock_gs.df = _create_sample_df([{"condition_id": "m1", "token1": "t1", "token2": "t2"}])
             mock_gs.positions = {"t1": {"size": 100}}
             mock_gs.orders = {"t2": {"buy": {}}}
 
@@ -865,9 +853,7 @@ class TestDetectOrphanedTokens:
     def test_detects_orphaned_position(self):
         """Test position token not in any sheet market is detected."""
         with patch.object(data_utils, "global_state") as mock_gs:
-            mock_gs.df = _create_sample_df(
-                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
-            )
+            mock_gs.df = _create_sample_df([{"condition_id": "m1", "token1": "t1", "token2": "t2"}])
             mock_gs.positions = {"t1": {"size": 100}, "orphan_token": {"size": 50}}
             mock_gs.orders = {}
 
@@ -878,9 +864,7 @@ class TestDetectOrphanedTokens:
     def test_detects_orphaned_order(self):
         """Test order token not in any sheet market is detected."""
         with patch.object(data_utils, "global_state") as mock_gs:
-            mock_gs.df = _create_sample_df(
-                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
-            )
+            mock_gs.df = _create_sample_df([{"condition_id": "m1", "token1": "t1", "token2": "t2"}])
             mock_gs.positions = {}
             mock_gs.orders = {"t1": {"buy": {}}, "orphan_token": {"buy": {}}}
 
@@ -891,9 +875,7 @@ class TestDetectOrphanedTokens:
     def test_detects_multiple_orphans(self):
         """Test multiple orphaned tokens from positions and orders."""
         with patch.object(data_utils, "global_state") as mock_gs:
-            mock_gs.df = _create_sample_df(
-                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
-            )
+            mock_gs.df = _create_sample_df([{"condition_id": "m1", "token1": "t1", "token2": "t2"}])
             mock_gs.positions = {"orphan1": {"size": 50}}
             mock_gs.orders = {"orphan2": {"buy": {}}}
 
@@ -926,9 +908,7 @@ class TestDetectOrphanedTokens:
     def test_handles_empty_positions_and_orders(self):
         """Test returns empty when no positions or orders exist."""
         with patch.object(data_utils, "global_state") as mock_gs:
-            mock_gs.df = _create_sample_df(
-                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
-            )
+            mock_gs.df = _create_sample_df([{"condition_id": "m1", "token1": "t1", "token2": "t2"}])
             mock_gs.positions = {}
             mock_gs.orders = {}
 
@@ -1071,9 +1051,7 @@ class TestCleanupOrphanedPositions:
         with (
             patch.object(data_utils, "global_state") as mock_gs,
             patch.object(data_utils, "detect_orphaned_tokens") as mock_detect,
-            patch.object(
-                data_utils, "cleanup_market", new_callable=AsyncMock
-            ) as mock_cleanup,
+            patch.object(data_utils, "cleanup_market", new_callable=AsyncMock) as mock_cleanup,
         ):
             mock_gs.client = mock_client
             mock_detect.return_value = {"token1", "token2"}

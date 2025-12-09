@@ -7,7 +7,7 @@ import traceback
 
 client = PolymarketClient()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     while True:
         try:
             update_stats_once(client)
@@ -15,4 +15,4 @@ if __name__ == '__main__':
             traceback.print_exc()
 
         print("Now sleeping\n")
-        time.sleep(60 * 60 * 3) #3 hours
+        time.sleep(60 * 60 * 3)  # 3 hours

@@ -87,8 +87,7 @@ class TestRunInExecutorPattern:
         async def async_wrapper(arg1, arg2, kwarg1=None):
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
-                executor,
-                functools.partial(sync_method_with_args, arg1, arg2, kwarg1=kwarg1)
+                executor, functools.partial(sync_method_with_args, arg1, arg2, kwarg1=kwarg1)
             )
 
         result = await async_wrapper("a", "b", kwarg1="c")
@@ -99,6 +98,7 @@ class TestRunInExecutorPattern:
     @pytest.mark.asyncio
     async def test_exception_propagates_through_executor(self):
         """Test that exceptions from sync methods propagate correctly."""
+
         def failing_sync_call():
             raise ValueError("Sync method failed")
 
@@ -116,11 +116,12 @@ class TestThreadPoolBehavior:
     @pytest.mark.asyncio
     async def test_custom_executor_is_used(self):
         """Test that a custom thread pool executor is properly used."""
-        executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='test_pool')
+        executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="test_pool")
         thread_names = []
 
         def capture_thread_name():
             import threading
+
             thread_names.append(threading.current_thread().name)
             return True
 
@@ -131,7 +132,7 @@ class TestThreadPoolBehavior:
         await async_wrapper()
 
         assert len(thread_names) == 1
-        assert 'test_pool' in thread_names[0]
+        assert "test_pool" in thread_names[0]
 
         executor.shutdown(wait=True)
 
@@ -147,6 +148,7 @@ class TestThreadPoolBehavior:
         def track_concurrency():
             nonlocal concurrent_count, max_concurrent
             import threading
+
             # Use a threading lock since this runs in thread pool
             concurrent_count += 1
             max_concurrent = max(max_concurrent, concurrent_count)
@@ -200,47 +202,47 @@ class TestAsyncWrapperIntegration:
         # Simulate blocking API calls
         def create_order_sync(market_id, action, price, size):
             time.sleep(0.005)  # Simulate HTTP latency
-            return {'order_id': f'{market_id}_{action}_{price}'}
+            return {"order_id": f"{market_id}_{action}_{price}"}
 
         def cancel_order_sync(asset_id):
             time.sleep(0.003)
-            return {'cancelled': True}
+            return {"cancelled": True}
 
         async def create_order_async(market_id, action, price, size):
             loop = asyncio.get_event_loop()
             import functools
+
             return await loop.run_in_executor(
-                executor,
-                functools.partial(create_order_sync, market_id, action, price, size)
+                executor, functools.partial(create_order_sync, market_id, action, price, size)
             )
 
         async def cancel_order_async(asset_id):
             loop = asyncio.get_event_loop()
             import functools
+
             return await loop.run_in_executor(
-                executor,
-                functools.partial(cancel_order_sync, asset_id)
+                executor, functools.partial(cancel_order_sync, asset_id)
             )
 
         # Simulate a trading flow
         start = time.monotonic()
 
         # Cancel existing orders, then place new ones (in sequence for same market)
-        await cancel_order_async('asset_1')
-        result1 = await create_order_async('market_1', 'BUY', 0.5, 100)
+        await cancel_order_async("asset_1")
+        result1 = await create_order_async("market_1", "BUY", 0.5, 100)
 
         # Different market can run in parallel
         results = await asyncio.gather(
-            create_order_async('market_2', 'BUY', 0.6, 50),
-            create_order_async('market_3', 'SELL', 0.7, 75),
+            create_order_async("market_2", "BUY", 0.6, 50),
+            create_order_async("market_3", "SELL", 0.7, 75),
         )
 
         elapsed = time.monotonic() - start
 
         # Verify results
-        assert result1 == {'order_id': 'market_1_BUY_0.5'}
-        assert results[0] == {'order_id': 'market_2_BUY_0.6'}
-        assert results[1] == {'order_id': 'market_3_SELL_0.7'}
+        assert result1 == {"order_id": "market_1_BUY_0.5"}
+        assert results[0] == {"order_id": "market_2_BUY_0.6"}
+        assert results[1] == {"order_id": "market_3_SELL_0.7"}
 
         # Parallel calls should complete faster than sequential
         assert elapsed < 0.05

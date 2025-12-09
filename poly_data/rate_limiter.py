@@ -26,24 +26,26 @@ import requests
 
 
 # Configure logging
-logger = logging.getLogger('poly_maker.rate_limiter')
+logger = logging.getLogger("poly_maker.rate_limiter")
 
 # Type variable for generic decorator
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class EndpointType(Enum):
     """API endpoint categories with different rate limits."""
-    BOOK = "book"              # /book, /price, /midpoint - 20 req/sec official
-    ORDER = "order"            # POST/DELETE /order - 240 req/sec burst official
+
+    BOOK = "book"  # /book, /price, /midpoint - 20 req/sec official
+    ORDER = "order"  # POST/DELETE /order - 240 req/sec burst official
     CANCEL_ALL = "cancel_all"  # /cancel-all - 20 req/sec burst official
-    DATA_API = "data_api"      # data-api.polymarket.com - 20 req/sec official
-    GENERAL = "general"        # catch-all - 500 req/sec official
+    DATA_API = "data_api"  # data-api.polymarket.com - 20 req/sec official
+    GENERAL = "general"  # catch-all - 500 req/sec official
 
 
 @dataclass
 class RateLimitConfig:
     """Configuration for an endpoint's rate limit."""
+
     requests_per_second: float
     burst_size: int
 
@@ -77,24 +79,24 @@ def get_endpoint_configs() -> Dict[EndpointType, RateLimitConfig]:
     """
     return {
         EndpointType.BOOK: RateLimitConfig(
-            requests_per_second=_get_env_float('RATE_LIMIT_BOOK', 10.0),
-            burst_size=_get_env_int('RATE_LIMIT_BOOK_BURST', 15)
+            requests_per_second=_get_env_float("RATE_LIMIT_BOOK", 10.0),
+            burst_size=_get_env_int("RATE_LIMIT_BOOK_BURST", 15),
         ),
         EndpointType.ORDER: RateLimitConfig(
-            requests_per_second=_get_env_float('RATE_LIMIT_ORDER', 80.0),
-            burst_size=_get_env_int('RATE_LIMIT_ORDER_BURST', 120)
+            requests_per_second=_get_env_float("RATE_LIMIT_ORDER", 80.0),
+            burst_size=_get_env_int("RATE_LIMIT_ORDER_BURST", 120),
         ),
         EndpointType.CANCEL_ALL: RateLimitConfig(
-            requests_per_second=_get_env_float('RATE_LIMIT_CANCEL', 8.0),
-            burst_size=_get_env_int('RATE_LIMIT_CANCEL_BURST', 12)
+            requests_per_second=_get_env_float("RATE_LIMIT_CANCEL", 8.0),
+            burst_size=_get_env_int("RATE_LIMIT_CANCEL_BURST", 12),
         ),
         EndpointType.DATA_API: RateLimitConfig(
-            requests_per_second=_get_env_float('RATE_LIMIT_DATA_API', 10.0),
-            burst_size=_get_env_int('RATE_LIMIT_DATA_API_BURST', 15)
+            requests_per_second=_get_env_float("RATE_LIMIT_DATA_API", 10.0),
+            burst_size=_get_env_int("RATE_LIMIT_DATA_API_BURST", 15),
         ),
         EndpointType.GENERAL: RateLimitConfig(
-            requests_per_second=_get_env_float('RATE_LIMIT_GENERAL', 50.0),
-            burst_size=_get_env_int('RATE_LIMIT_GENERAL_BURST', 75)
+            requests_per_second=_get_env_float("RATE_LIMIT_GENERAL", 50.0),
+            burst_size=_get_env_int("RATE_LIMIT_GENERAL_BURST", 75),
         ),
     }
 
@@ -125,10 +127,7 @@ class RateLimiter:
         """Refill tokens based on elapsed time."""
         now = time.monotonic()
         elapsed = now - self.last_update
-        self.tokens = min(
-            self.burst_size,
-            self.tokens + elapsed * self.requests_per_second
-        )
+        self.tokens = min(self.burst_size, self.tokens + elapsed * self.requests_per_second)
         self.last_update = now
 
     def acquire_sync(self) -> None:
@@ -172,6 +171,7 @@ class RateLimiter:
 
 class RetryableError(Exception):
     """Exception indicating the request should be retried."""
+
     pass
 
 
@@ -190,7 +190,7 @@ def with_retry(
     base_delay: float = 1.0,
     max_delay: float = 60.0,
     jitter: bool = True,
-    rate_limiter: RateLimiter = None
+    rate_limiter: RateLimiter = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Decorator for exponential backoff retry on failures and rate limits.
@@ -210,6 +210,7 @@ def with_retry(
         def fetch_data():
             return requests.get(url)
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         def wrapper(*args, **kwargs) -> T:
@@ -227,32 +228,40 @@ def with_retry(
                     if isinstance(result, requests.Response):
                         if is_rate_limited(result):
                             # Get retry-after header if available
-                            retry_after = result.headers.get('Retry-After')
+                            retry_after = result.headers.get("Retry-After")
                             if retry_after:
                                 delay = float(retry_after)
                             else:
                                 delay = _calculate_delay(attempt, base_delay, max_delay, jitter)
 
-                            print(f"Rate limited (429). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}")
+                            print(
+                                f"Rate limited (429). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}"
+                            )
                             time.sleep(delay)
                             continue
 
                         if is_server_error(result):
                             delay = _calculate_delay(attempt, base_delay, max_delay, jitter)
-                            print(f"Server error ({result.status_code}). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}")
+                            print(
+                                f"Server error ({result.status_code}). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}"
+                            )
                             time.sleep(delay)
                             continue
 
                     return result
 
-                except (requests.exceptions.ConnectionError,
-                        requests.exceptions.Timeout,
-                        RetryableError) as e:
+                except (
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    RetryableError,
+                ) as e:
                     last_exception = e
 
                     if attempt < max_retries:
                         delay = _calculate_delay(attempt, base_delay, max_delay, jitter)
-                        print(f"Request failed ({type(e).__name__}). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}")
+                        print(
+                            f"Request failed ({type(e).__name__}). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}"
+                        )
                         time.sleep(delay)
                     else:
                         print(f"Request failed after {max_retries} retries: {e}")
@@ -268,6 +277,7 @@ def with_retry(
             return result
 
         return wrapper
+
     return decorator
 
 
@@ -276,7 +286,7 @@ def with_retry_async(
     base_delay: float = 1.0,
     max_delay: float = 60.0,
     jitter: bool = True,
-    rate_limiter: RateLimiter = None
+    rate_limiter: RateLimiter = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Async version of with_retry decorator.
@@ -291,6 +301,7 @@ def with_retry_async(
     Returns:
         Decorated async function with retry logic
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         async def wrapper(*args, **kwargs) -> T:
@@ -310,7 +321,9 @@ def with_retry_async(
 
                     if attempt < max_retries:
                         delay = _calculate_delay(attempt, base_delay, max_delay, jitter)
-                        print(f"Async request failed ({type(e).__name__}). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}")
+                        print(
+                            f"Async request failed ({type(e).__name__}). Waiting {delay:.2f}s before retry {attempt + 1}/{max_retries}"
+                        )
                         await asyncio.sleep(delay)
                     else:
                         print(f"Async request failed after {max_retries} retries: {e}")
@@ -324,12 +337,13 @@ def with_retry_async(
             return result
 
         return wrapper
+
     return decorator
 
 
 def _calculate_delay(attempt: int, base_delay: float, max_delay: float, jitter: bool) -> float:
     """Calculate delay with exponential backoff and optional jitter."""
-    delay = min(base_delay * (2 ** attempt), max_delay)
+    delay = min(base_delay * (2**attempt), max_delay)
 
     if jitter:
         # Add random jitter between 0% and 25% of the delay
@@ -346,11 +360,7 @@ class CircuitBreaker:
     configurable duration to allow the API rate limits to reset.
     """
 
-    def __init__(
-        self,
-        threshold: int = None,
-        pause_duration: float = None
-    ):
+    def __init__(self, threshold: int = None, pause_duration: float = None):
         """
         Initialize the circuit breaker.
 
@@ -358,8 +368,8 @@ class CircuitBreaker:
             threshold: Number of consecutive 429s before tripping (default from env: 3)
             pause_duration: Seconds to pause when tripped (default from env: 30)
         """
-        self.threshold = threshold or _get_env_int('CIRCUIT_BREAKER_THRESHOLD', 3)
-        self.pause_duration = pause_duration or _get_env_float('CIRCUIT_BREAKER_PAUSE', 30.0)
+        self.threshold = threshold or _get_env_int("CIRCUIT_BREAKER_THRESHOLD", 3)
+        self.pause_duration = pause_duration or _get_env_float("CIRCUIT_BREAKER_PAUSE", 30.0)
         self.consecutive_429s = 0
         self.paused_until: Optional[float] = None
         self._lock = threading.Lock()
@@ -379,7 +389,9 @@ class CircuitBreaker:
         """Record a successful response. Resets the 429 counter."""
         with self._lock:
             if self.consecutive_429s > 0:
-                logger.debug(f"Circuit breaker reset after {self.consecutive_429s} consecutive 429s")
+                logger.debug(
+                    f"Circuit breaker reset after {self.consecutive_429s} consecutive 429s"
+                )
             self.consecutive_429s = 0
 
     def is_open(self) -> bool:
@@ -435,8 +447,7 @@ class EndpointRateLimitManager:
         configs = get_endpoint_configs()
         for endpoint_type, config in configs.items():
             self._limiters[endpoint_type] = RateLimiter(
-                requests_per_second=config.requests_per_second,
-                burst_size=config.burst_size
+                requests_per_second=config.requests_per_second, burst_size=config.burst_size
             )
             logger.info(
                 f"Rate limiter initialized: {endpoint_type.value} = "

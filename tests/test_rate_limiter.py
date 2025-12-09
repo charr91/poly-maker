@@ -386,36 +386,36 @@ class TestEnvHelpers:
 
     def test_get_env_float_with_valid_value(self):
         """Test _get_env_float returns correct float from environment."""
-        with patch.dict(os.environ, {'TEST_FLOAT': '15.5'}):
-            result = _get_env_float('TEST_FLOAT', 10.0)
+        with patch.dict(os.environ, {"TEST_FLOAT": "15.5"}):
+            result = _get_env_float("TEST_FLOAT", 10.0)
             assert result == 15.5
 
     def test_get_env_float_with_default(self):
         """Test _get_env_float returns default when env var is not set."""
-        result = _get_env_float('NONEXISTENT_VAR_12345', 42.0)
+        result = _get_env_float("NONEXISTENT_VAR_12345", 42.0)
         assert result == 42.0
 
     def test_get_env_float_with_invalid_value(self):
         """Test _get_env_float returns default when env var is invalid."""
-        with patch.dict(os.environ, {'TEST_FLOAT': 'not_a_number'}):
-            result = _get_env_float('TEST_FLOAT', 10.0)
+        with patch.dict(os.environ, {"TEST_FLOAT": "not_a_number"}):
+            result = _get_env_float("TEST_FLOAT", 10.0)
             assert result == 10.0
 
     def test_get_env_int_with_valid_value(self):
         """Test _get_env_int returns correct int from environment."""
-        with patch.dict(os.environ, {'TEST_INT': '25'}):
-            result = _get_env_int('TEST_INT', 10)
+        with patch.dict(os.environ, {"TEST_INT": "25"}):
+            result = _get_env_int("TEST_INT", 10)
             assert result == 25
 
     def test_get_env_int_with_default(self):
         """Test _get_env_int returns default when env var is not set."""
-        result = _get_env_int('NONEXISTENT_VAR_12345', 99)
+        result = _get_env_int("NONEXISTENT_VAR_12345", 99)
         assert result == 99
 
     def test_get_env_int_with_invalid_value(self):
         """Test _get_env_int returns default when env var is invalid."""
-        with patch.dict(os.environ, {'TEST_INT': 'not_an_int'}):
-            result = _get_env_int('TEST_INT', 10)
+        with patch.dict(os.environ, {"TEST_INT": "not_an_int"}):
+            result = _get_env_int("TEST_INT", 10)
             assert result == 10
 
 
@@ -465,8 +465,11 @@ class TestGetEndpointConfigs:
         """Test default configuration values without env vars."""
         # Clear any related env vars
         env_vars_to_clear = [
-            'RATE_LIMIT_BOOK', 'RATE_LIMIT_ORDER', 'RATE_LIMIT_CANCEL',
-            'RATE_LIMIT_DATA_API', 'RATE_LIMIT_GENERAL'
+            "RATE_LIMIT_BOOK",
+            "RATE_LIMIT_ORDER",
+            "RATE_LIMIT_CANCEL",
+            "RATE_LIMIT_DATA_API",
+            "RATE_LIMIT_GENERAL",
         ]
         clean_env = {k: v for k, v in os.environ.items() if k not in env_vars_to_clear}
 
@@ -482,7 +485,7 @@ class TestGetEndpointConfigs:
 
     def test_env_var_override(self):
         """Test that env vars override default values."""
-        with patch.dict(os.environ, {'RATE_LIMIT_BOOK': '5.0'}):
+        with patch.dict(os.environ, {"RATE_LIMIT_BOOK": "5.0"}):
             configs = get_endpoint_configs()
             assert configs[EndpointType.BOOK].requests_per_second == 5.0
 
@@ -506,10 +509,9 @@ class TestCircuitBreaker:
 
     def test_init_from_env_vars(self):
         """Test CircuitBreaker reads from environment variables."""
-        with patch.dict(os.environ, {
-            'CIRCUIT_BREAKER_THRESHOLD': '10',
-            'CIRCUIT_BREAKER_PAUSE': '45.0'
-        }):
+        with patch.dict(
+            os.environ, {"CIRCUIT_BREAKER_THRESHOLD": "10", "CIRCUIT_BREAKER_PAUSE": "45.0"}
+        ):
             cb = CircuitBreaker()
             assert cb.threshold == 10
             assert cb.pause_duration == 45.0
@@ -748,7 +750,7 @@ class TestGetRateLimitManager:
     def test_manager_has_circuit_breaker(self):
         """Test the returned manager has a circuit breaker."""
         manager = get_rate_limit_manager()
-        assert hasattr(manager, 'circuit_breaker')
+        assert hasattr(manager, "circuit_breaker")
         assert isinstance(manager.circuit_breaker, CircuitBreaker)
 
 
