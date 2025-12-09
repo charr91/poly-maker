@@ -844,3 +844,352 @@ class TestNoTokenPriceTransformation:
             assert call_args[2] == pytest.approx(0.30, abs=1e-9)  # Handle floating-point precision
             assert call_args[3] == 100
             assert call_args[4] is False
+
+
+class TestDetectOrphanedTokens:
+    """Tests for detect_orphaned_tokens function."""
+
+    def test_no_orphans_when_all_tokens_in_sheet(self):
+        """Test no orphans returned when all positions/orders match sheet tokens."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.df = _create_sample_df(
+                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
+            )
+            mock_gs.positions = {"t1": {"size": 100}}
+            mock_gs.orders = {"t2": {"buy": {}}}
+
+            orphans = data_utils.detect_orphaned_tokens()
+
+            assert orphans == set()
+
+    def test_detects_orphaned_position(self):
+        """Test position token not in any sheet market is detected."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.df = _create_sample_df(
+                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
+            )
+            mock_gs.positions = {"t1": {"size": 100}, "orphan_token": {"size": 50}}
+            mock_gs.orders = {}
+
+            orphans = data_utils.detect_orphaned_tokens()
+
+            assert orphans == {"orphan_token"}
+
+    def test_detects_orphaned_order(self):
+        """Test order token not in any sheet market is detected."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.df = _create_sample_df(
+                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
+            )
+            mock_gs.positions = {}
+            mock_gs.orders = {"t1": {"buy": {}}, "orphan_token": {"buy": {}}}
+
+            orphans = data_utils.detect_orphaned_tokens()
+
+            assert orphans == {"orphan_token"}
+
+    def test_detects_multiple_orphans(self):
+        """Test multiple orphaned tokens from positions and orders."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.df = _create_sample_df(
+                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
+            )
+            mock_gs.positions = {"orphan1": {"size": 50}}
+            mock_gs.orders = {"orphan2": {"buy": {}}}
+
+            orphans = data_utils.detect_orphaned_tokens()
+
+            assert orphans == {"orphan1", "orphan2"}
+
+    def test_handles_empty_sheet(self):
+        """Test returns empty when sheet is empty (nothing to compare against)."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.df = pd.DataFrame()
+            mock_gs.positions = {"t1": {"size": 100}}
+            mock_gs.orders = {}
+
+            orphans = data_utils.detect_orphaned_tokens()
+
+            assert orphans == set()
+
+    def test_handles_none_sheet(self):
+        """Test returns empty when sheet is None."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.df = None
+            mock_gs.positions = {"t1": {"size": 100}}
+            mock_gs.orders = {}
+
+            orphans = data_utils.detect_orphaned_tokens()
+
+            assert orphans == set()
+
+    def test_handles_empty_positions_and_orders(self):
+        """Test returns empty when no positions or orders exist."""
+        with patch.object(data_utils, "global_state") as mock_gs:
+            mock_gs.df = _create_sample_df(
+                [{"condition_id": "m1", "token1": "t1", "token2": "t2"}]
+            )
+            mock_gs.positions = {}
+            mock_gs.orders = {}
+
+            orphans = data_utils.detect_orphaned_tokens()
+
+            assert orphans == set()
+
+
+class TestCleanupOrphanedPositions:
+    """Tests for cleanup_orphaned_positions function."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Create a mock client with required methods."""
+        client = MagicMock()
+        client.get_market_by_token_async = AsyncMock()
+        client.create_order_async = AsyncMock()
+        client.merge_positions_async = AsyncMock()
+        client.cancel_all_market_async = AsyncMock()
+        return client
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_orphans(self, mock_client):
+        """Test no API calls when no orphans detected."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "detect_orphaned_tokens") as mock_detect,
+            patch.object(data_utils, "cleanup_market", new_callable=AsyncMock) as mock_cleanup,
+        ):
+            mock_gs.client = mock_client
+            mock_detect.return_value = set()
+
+            await data_utils.cleanup_orphaned_positions()
+
+            mock_client.get_market_by_token_async.assert_not_called()
+            mock_cleanup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetches_market_info_for_orphans(self, mock_client):
+        """Test API is called to fetch market info for orphaned tokens."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "detect_orphaned_tokens") as mock_detect,
+            patch.object(data_utils, "cleanup_market", new_callable=AsyncMock) as mock_cleanup,
+        ):
+            mock_gs.client = mock_client
+            mock_detect.return_value = {"orphan_token"}
+            mock_client.get_market_by_token_async.return_value = {
+                "condition_id": "cond123",
+                "question": "Test market?",
+                "neg_risk": False,
+                "tokens": [{"token_id": "orphan_token"}, {"token_id": "token2"}],
+            }
+
+            await data_utils.cleanup_orphaned_positions()
+
+            mock_client.get_market_by_token_async.assert_called_once_with("orphan_token")
+            mock_cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_receives_correct_removal_info(self, mock_client):
+        """Test cleanup_market receives correct removal info dict."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "detect_orphaned_tokens") as mock_detect,
+            patch.object(data_utils, "cleanup_market", new_callable=AsyncMock) as mock_cleanup,
+        ):
+            mock_gs.client = mock_client
+            mock_detect.return_value = {"orphan_token"}
+            mock_client.get_market_by_token_async.return_value = {
+                "condition_id": "cond123",
+                "question": "Will it rain?",
+                "neg_risk": True,
+                "tokens": [{"token_id": "orphan_token"}, {"token_id": "other_token"}],
+            }
+
+            await data_utils.cleanup_orphaned_positions()
+
+            call_args = mock_cleanup.call_args
+            assert call_args[0][0] == "cond123"  # condition_id
+            removal_info = call_args[0][1]
+            assert removal_info["tokens"] == ["orphan_token", "other_token"]
+            assert removal_info["question"] == "Will it rain?"
+            assert removal_info["neg_risk"] is True
+
+    @pytest.mark.asyncio
+    async def test_handles_api_failure_gracefully(self, mock_client):
+        """Test continues cleanup even if API fails for one token."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "detect_orphaned_tokens") as mock_detect,
+            patch.object(data_utils, "cleanup_market", new_callable=AsyncMock) as mock_cleanup,
+        ):
+            mock_gs.client = mock_client
+            mock_detect.return_value = {"token1", "token2"}
+            # First call fails, second succeeds
+            mock_client.get_market_by_token_async.side_effect = [
+                None,  # API failure
+                {
+                    "condition_id": "c2",
+                    "question": "Q2",
+                    "neg_risk": False,
+                    "tokens": [{"token_id": "token2"}],
+                },
+            ]
+
+            await data_utils.cleanup_orphaned_positions()
+
+            assert mock_client.get_market_by_token_async.call_count == 2
+            mock_cleanup.assert_called_once()  # Only one market cleaned up
+
+    @pytest.mark.asyncio
+    async def test_skips_duplicate_condition_ids(self, mock_client):
+        """Test same condition_id isn't cleaned up twice (YES/NO tokens)."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "detect_orphaned_tokens") as mock_detect,
+            patch.object(data_utils, "cleanup_market", new_callable=AsyncMock) as mock_cleanup,
+        ):
+            mock_gs.client = mock_client
+            mock_detect.return_value = {"yes_token", "no_token"}
+            # Both tokens belong to same market
+            mock_client.get_market_by_token_async.return_value = {
+                "condition_id": "same_market",
+                "question": "Same market",
+                "neg_risk": False,
+                "tokens": [{"token_id": "yes_token"}, {"token_id": "no_token"}],
+            }
+
+            await data_utils.cleanup_orphaned_positions()
+
+            # Should only clean up once even though two tokens were orphaned
+            mock_cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handles_cleanup_error_gracefully(self, mock_client):
+        """Test continues even if cleanup_market raises an error."""
+        with (
+            patch.object(data_utils, "global_state") as mock_gs,
+            patch.object(data_utils, "detect_orphaned_tokens") as mock_detect,
+            patch.object(
+                data_utils, "cleanup_market", new_callable=AsyncMock
+            ) as mock_cleanup,
+        ):
+            mock_gs.client = mock_client
+            mock_detect.return_value = {"token1", "token2"}
+            mock_client.get_market_by_token_async.side_effect = [
+                {
+                    "condition_id": "c1",
+                    "question": "Q1",
+                    "neg_risk": False,
+                    "tokens": [{"token_id": "token1"}],
+                },
+                {
+                    "condition_id": "c2",
+                    "question": "Q2",
+                    "neg_risk": False,
+                    "tokens": [{"token_id": "token2"}],
+                },
+            ]
+            # First cleanup fails, second should still run
+            mock_cleanup.side_effect = [Exception("Cleanup error"), None]
+
+            # Should not raise
+            await data_utils.cleanup_orphaned_positions()
+
+            assert mock_cleanup.call_count == 2
+
+
+class TestGetMarketByToken:
+    """Tests for get_market_by_token in PolymarketClient."""
+
+    def test_returns_market_info_on_success(self):
+        """Test returns market info when API call succeeds."""
+        from poly_data.polymarket_client import PolymarketClient
+
+        with (
+            patch("requests.get") as mock_get,
+            patch.object(PolymarketClient, "__init__", lambda self, pk="default": None),
+            patch("poly_data.polymarket_client.get_rate_limit_manager") as mock_rlm,
+        ):
+            mock_rlm.return_value.acquire_sync.return_value = None
+            mock_rlm.return_value.on_response.return_value = None
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [{"condition_id": "c1", "question": "Q?"}]
+            mock_get.return_value = mock_response
+
+            client = PolymarketClient()
+            result = client.get_market_by_token("token123")
+
+            assert result == {"condition_id": "c1", "question": "Q?"}
+            mock_get.assert_called_with(
+                "https://gamma-api.polymarket.com/markets?clob_token_ids=token123",
+                timeout=30,
+            )
+
+    def test_returns_none_on_empty_response(self):
+        """Test returns None when API returns empty list."""
+        from poly_data.polymarket_client import PolymarketClient
+
+        with (
+            patch("requests.get") as mock_get,
+            patch.object(PolymarketClient, "__init__", lambda self, pk="default": None),
+            patch("poly_data.polymarket_client.get_rate_limit_manager") as mock_rlm,
+        ):
+            mock_rlm.return_value.acquire_sync.return_value = None
+            mock_rlm.return_value.on_response.return_value = None
+
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = []
+            mock_get.return_value = mock_response
+
+            client = PolymarketClient()
+            result = client.get_market_by_token("unknown_token")
+
+            assert result is None
+
+    def test_returns_none_on_http_error(self):
+        """Test returns None when API returns HTTP error."""
+        from poly_data.polymarket_client import PolymarketClient
+        import requests
+
+        with (
+            patch("requests.get") as mock_get,
+            patch.object(PolymarketClient, "__init__", lambda self, pk="default": None),
+            patch("poly_data.polymarket_client.get_rate_limit_manager") as mock_rlm,
+        ):
+            mock_rlm.return_value.acquire_sync.return_value = None
+            mock_rlm.return_value.on_response.return_value = None
+
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+                response=mock_response
+            )
+            mock_get.return_value = mock_response
+
+            client = PolymarketClient()
+            result = client.get_market_by_token("token123")
+
+            assert result is None
+
+    def test_returns_none_on_timeout(self):
+        """Test returns None on request timeout."""
+        from poly_data.polymarket_client import PolymarketClient
+        import requests
+
+        with (
+            patch("requests.get") as mock_get,
+            patch.object(PolymarketClient, "__init__", lambda self, pk="default": None),
+            patch("poly_data.polymarket_client.get_rate_limit_manager") as mock_rlm,
+        ):
+            mock_rlm.return_value.acquire_sync.return_value = None
+            mock_rlm.return_value.on_response.return_value = None
+
+            mock_get.side_effect = requests.exceptions.Timeout()
+
+            client = PolymarketClient()
+            result = client.get_market_by_token("token123")
+
+            assert result is None

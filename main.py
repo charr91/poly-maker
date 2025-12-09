@@ -6,7 +6,12 @@ import logging  # Logging
 import threading  # Thread management
 
 from poly_data.polymarket_client import PolymarketClient
-from poly_data.data_utils import update_markets, update_positions, update_orders
+from poly_data.data_utils import (
+    update_markets,
+    update_positions,
+    update_orders,
+    cleanup_orphaned_positions,
+)
 from poly_data.websocket_handlers import connect_market_websocket, connect_user_websocket
 import poly_data.global_state as global_state
 from poly_data.data_processing import remove_from_performing
@@ -109,6 +114,10 @@ async def main():
     # Initialize state and fetch initial data
     global_state.all_tokens = []
     update_once()
+
+    # Cleanup orphaned positions from previous sessions
+    # (positions whose markets were removed from sheet while bot was stopped)
+    await cleanup_orphaned_positions()
 
     logger.debug("Initial orders: %s", global_state.orders)
     logger.debug("Initial positions: %s", global_state.positions)

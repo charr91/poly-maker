@@ -4,6 +4,7 @@ import asyncio  # Async support
 import atexit  # Cleanup handlers
 from concurrent.futures import ThreadPoolExecutor
 import functools  # For partial function binding
+from typing import Optional
 
 # Polymarket API client libraries
 from py_clob_client.client import ClobClient
@@ -371,6 +372,38 @@ class PolymarketClient:
             get_rate_limit_manager().on_response(500)
             raise
 
+    def get_market_by_token(self, token_id: str) -> Optional[dict]:
+        """
+        Get market info by token ID via Polymarket Gamma API.
+
+        This is useful for looking up market details (condition_id, question, neg_risk)
+        when you only have a token ID (e.g., from a position or order).
+
+        Args:
+            token_id (str): The CLOB token ID to look up
+
+        Returns:
+            dict: Market info including condition_id, question, neg_risk, tokens, etc.
+                  Returns None if the token is not found or API call fails.
+        """
+        get_rate_limit_manager().acquire_sync(EndpointType.DATA_API)
+
+        try:
+            url = f"https://gamma-api.polymarket.com/markets?clob_token_ids={token_id}"
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            get_rate_limit_manager().on_response(response.status_code)
+
+            markets = response.json()
+            return markets[0] if markets else None
+        except requests.exceptions.HTTPError as ex:
+            status_code = ex.response.status_code if ex.response is not None else 500
+            get_rate_limit_manager().on_response(status_code)
+            return None
+        except Exception:
+            get_rate_limit_manager().on_response(500)
+            return None
+
     def cancel_all_asset(self, asset_id):
         """
         Cancel all orders for a specific asset token.
@@ -578,4 +611,15 @@ class PolymarketClient:
             functools.partial(
                 self.merge_positions, amount_to_merge, condition_id, is_neg_risk_market
             ),
+        )
+
+    async def get_market_by_token_async(self, token_id: str) -> Optional[dict]:
+        """
+        Async wrapper for get_market_by_token - runs in thread pool.
+
+        Use this in async code to avoid blocking the event loop.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _api_executor, functools.partial(self.get_market_by_token, token_id)
         )

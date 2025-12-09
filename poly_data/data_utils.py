@@ -205,6 +205,93 @@ def detect_removed_markets(new_df) -> Set[str]:
     return current_condition_ids - new_condition_ids
 
 
+def detect_orphaned_tokens() -> Set[str]:
+    """
+    Detect tokens with positions/orders that aren't in the current sheet.
+
+    This function is called at startup to find positions from previous sessions
+    that are no longer in the Selected Markets sheet.
+
+    Returns:
+        Set of orphaned token IDs
+    """
+    if global_state.df is None or len(global_state.df) == 0:
+        return set()
+
+    # Get all tokens currently in sheet
+    known_tokens = set()
+    for _, row in global_state.df.iterrows():
+        known_tokens.add(str(row["token1"]))
+        known_tokens.add(str(row["token2"]))
+
+    # Find orphans in positions and orders
+    orphaned = set()
+    for token in global_state.positions.keys():
+        if token not in known_tokens:
+            orphaned.add(token)
+    for token in global_state.orders.keys():
+        if token not in known_tokens:
+            orphaned.add(token)
+
+    return orphaned
+
+
+async def cleanup_orphaned_positions() -> None:
+    """
+    Cleanup positions/orders for markets not in the sheet.
+
+    Called at startup to handle positions from previous sessions where the market
+    was removed from the sheet while the bot was not running.
+    """
+    orphaned_tokens = detect_orphaned_tokens()
+    if not orphaned_tokens:
+        logger.debug("No orphaned tokens found at startup")
+        return
+
+    logger.info("Found %d orphaned tokens, fetching market info...", len(orphaned_tokens))
+
+    # Group tokens by market to avoid duplicate API calls and cleanups
+    processed_conditions = set()
+
+    for token in orphaned_tokens:
+        market_info = await global_state.client.get_market_by_token_async(token)
+        if not market_info:
+            logger.warning("Could not fetch market info for orphaned token %s", token[:20])
+            continue
+
+        condition_id = market_info.get("condition_id")
+        if not condition_id or condition_id in processed_conditions:
+            continue
+        processed_conditions.add(condition_id)
+
+        # Build token list from market info
+        tokens = []
+        for t in market_info.get("tokens", []):
+            token_id = t.get("token_id")
+            if token_id:
+                tokens.append(str(token_id))
+
+        neg_risk = market_info.get("neg_risk", False)
+        question = market_info.get("question", "Unknown")
+
+        removal_info = {
+            "tokens": tokens,
+            "question": question,
+            "neg_risk": neg_risk,
+        }
+
+        logger.info(
+            "Cleaning up orphaned market: %s - %s",
+            condition_id[:16],
+            question[:50] if question else "Unknown",
+        )
+
+        try:
+            await cleanup_market(condition_id, removal_info)
+        except Exception as e:
+            logger.error("Error cleaning up orphaned market %s: %s", condition_id[:16], e)
+
+
 def add_to_pending_removal(condition_id: str, tokens: list, question: str, neg_risk: bool) -> None:
     """
     Add a market to the pending removal queue with grace period.
