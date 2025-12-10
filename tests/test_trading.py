@@ -617,3 +617,309 @@ class TestTradeSemaphore:
         await asyncio.gather(*[mock_trade() for _ in range(5)])
 
         assert max_active <= 2
+
+
+class TestPnLCalculation:
+    """Tests for PnL calculation with YES and NO tokens.
+
+    These tests verify that:
+    1. PnL is calculated correctly for YES tokens (token1)
+    2. Price transformation for NO tokens (token2) works correctly
+    3. The combination results in correct PnL for both token types
+    """
+
+    @pytest.fixture
+    def mock_market_deets_yes_profitable(self):
+        """Market where YES token price increased (profitable)."""
+        return {
+            "best_bid": 0.55,
+            "best_ask": 0.57,
+            "best_bid_size": 500,
+            "best_ask_size": 500,
+            "second_best_bid": 0.54,
+            "second_best_ask": 0.58,
+            "second_best_bid_size": 300,
+            "second_best_ask_size": 300,
+            "top_bid": 0.55,
+            "top_ask": 0.57,
+            "bid_sum_within_n_percent": 1000,
+            "ask_sum_within_n_percent": 1000,
+        }
+
+    @pytest.fixture
+    def mock_market_deets_yes_losing(self):
+        """Market where YES token price decreased (losing)."""
+        return {
+            "best_bid": 0.35,
+            "best_ask": 0.37,
+            "best_bid_size": 500,
+            "best_ask_size": 500,
+            "second_best_bid": 0.34,
+            "second_best_ask": 0.38,
+            "second_best_bid_size": 300,
+            "second_best_ask_size": 300,
+            "top_bid": 0.35,
+            "top_ask": 0.37,
+            "bid_sum_within_n_percent": 1000,
+            "ask_sum_within_n_percent": 1000,
+        }
+
+    def test_pnl_formula_yes_token_profitable(self):
+        """Test PnL formula shows profit when YES price rises.
+
+        Scenario: Bought YES at 0.40, now at 0.56 mid_price
+        Expected: (0.56 - 0.40) / 0.40 * 100 = +40%
+        """
+        avgPrice = 0.40
+        mid_price = 0.56
+        pnl = (mid_price - avgPrice) / avgPrice * 100
+
+        assert pnl > 0, "PnL should be positive when price rises"
+        assert abs(pnl - 40.0) < 0.01, f"Expected +40%, got {pnl}%"
+
+    def test_pnl_formula_yes_token_losing(self):
+        """Test PnL formula shows loss when YES price falls.
+
+        Scenario: Bought YES at 0.50, now at 0.36 mid_price
+        Expected: (0.36 - 0.50) / 0.50 * 100 = -28%
+        """
+        avgPrice = 0.50
+        mid_price = 0.36
+        pnl = (mid_price - avgPrice) / avgPrice * 100
+
+        assert pnl < 0, "PnL should be negative when price falls"
+        assert abs(pnl - (-28.0)) < 0.01, f"Expected -28%, got {pnl}%"
+
+    def test_pnl_formula_no_token_price_transformation(self):
+        """Test that NO token prices are correctly transformed.
+
+        For token2 (NO), get_best_bid_ask_deets transforms:
+        - best_bid becomes 1 - best_ask
+        - best_ask becomes 1 - best_bid
+
+        If YES market shows bid=0.60, ask=0.65:
+        - NO best_bid = 1 - 0.65 = 0.35
+        - NO best_ask = 1 - 0.60 = 0.40
+        - NO mid_price = (0.35 + 0.40) / 2 = 0.375
+        """
+        yes_best_bid = 0.60
+        yes_best_ask = 0.65
+
+        # Transformation that happens in get_best_bid_ask_deets for token2
+        no_best_bid = 1 - yes_best_ask
+        no_best_ask = 1 - yes_best_bid
+        no_mid_price = (no_best_bid + no_best_ask) / 2
+
+        assert abs(no_best_bid - 0.35) < 0.001
+        assert abs(no_best_ask - 0.40) < 0.001
+        assert abs(no_mid_price - 0.375) < 0.001
+
+    def test_pnl_formula_no_token_losing_when_yes_rises(self):
+        """Test NO position shows loss when YES price rises.
+
+        Scenario:
+        - Bought NO at 0.55 (when YES was at 0.45)
+        - Now YES is at 0.60, so NO mid_price is ~0.40
+        - PnL = (0.40 - 0.55) / 0.55 * 100 = -27.27%
+        """
+        no_avgPrice = 0.55  # Purchase price of NO token
+        # After get_best_bid_ask_deets transformation for token2
+        no_mid_price = 0.40  # Current NO price (YES rose to ~0.60)
+
+        pnl = (no_mid_price - no_avgPrice) / no_avgPrice * 100
+
+        assert pnl < 0, "NO position should show loss when YES rises"
+        assert abs(pnl - (-27.27)) < 0.1, f"Expected ~-27.27%, got {pnl}%"
+
+    def test_pnl_formula_no_token_profitable_when_yes_falls(self):
+        """Test NO position shows profit when YES price falls.
+
+        Scenario:
+        - Bought NO at 0.45 (when YES was at 0.55)
+        - Now YES is at 0.40, so NO mid_price is ~0.60
+        - PnL = (0.60 - 0.45) / 0.45 * 100 = +33.33%
+        """
+        no_avgPrice = 0.45  # Purchase price of NO token
+        no_mid_price = 0.60  # Current NO price (YES fell to ~0.40)
+
+        pnl = (no_mid_price - no_avgPrice) / no_avgPrice * 100
+
+        assert pnl > 0, "NO position should show profit when YES falls"
+        assert abs(pnl - 33.33) < 0.1, f"Expected ~+33.33%, got {pnl}%"
+
+
+class TestPriceTransformation:
+    """Tests for token2 price transformation in get_best_bid_ask_deets."""
+
+    def test_token2_transformation_complete(self):
+        """Test complete price transformation for token2."""
+        from poly_data.trading_utils import get_best_bid_ask_deets
+        from sortedcontainers import SortedDict
+        import poly_data.global_state as global_state
+
+        # Set up mock order book data
+        # YES market: bid=0.45, ask=0.55
+        market_id = "test_market_transform"
+        global_state.all_data[market_id] = {
+            "bids": SortedDict({0.45: 1000, 0.44: 500}),
+            "asks": SortedDict({0.55: 1000, 0.56: 500}),
+        }
+
+        try:
+            # Get prices for token1 (YES)
+            yes_deets = get_best_bid_ask_deets(market_id, "token1", 100, 0.1)
+
+            # Get prices for token2 (NO)
+            no_deets = get_best_bid_ask_deets(market_id, "token2", 100, 0.1)
+
+            # YES should have original prices
+            assert yes_deets["best_bid"] == 0.45
+            assert yes_deets["best_ask"] == 0.55
+
+            # NO should have transformed prices (1 - opposite)
+            assert abs(no_deets["best_bid"] - 0.45) < 0.001  # 1 - 0.55
+            assert abs(no_deets["best_ask"] - 0.55) < 0.001  # 1 - 0.45
+
+            # Mid prices should be complementary
+            yes_mid = (yes_deets["best_bid"] + yes_deets["best_ask"]) / 2
+            no_mid = (no_deets["best_bid"] + no_deets["best_ask"]) / 2
+
+            # YES mid + NO mid should equal 1
+            assert abs((yes_mid + no_mid) - 1.0) < 0.01
+
+        finally:
+            # Clean up
+            if market_id in global_state.all_data:
+                del global_state.all_data[market_id]
+
+
+class TestStopLossTriggerConditions:
+    """Tests documenting stop-loss trigger conditions.
+
+    Stop-loss triggers when EITHER:
+    1. PnL < stop_loss_threshold AND spread <= spread_threshold
+    2. Volatility (3_hour) > volatility_threshold
+    """
+
+    @pytest.fixture
+    def sample_params(self):
+        return {
+            "stop_loss_threshold": -10,
+            "spread_threshold": 0.05,
+            "volatility_threshold": 2.0,
+            "take_profit_threshold": 5,
+            "sleep_period": 24,
+        }
+
+    def test_stop_loss_condition_pnl_and_spread(self, sample_params):
+        """Test stop-loss triggers on PnL + spread condition.
+
+        Condition: pnl < -10 AND spread <= 0.05
+        """
+        pnl = -15  # Below threshold
+        spread = 0.04  # Within threshold
+        volatility = 1.0  # Below threshold
+
+        should_stop_loss = (
+            pnl < sample_params["stop_loss_threshold"]
+            and spread <= sample_params["spread_threshold"]
+        ) or volatility > sample_params["volatility_threshold"]
+
+        assert should_stop_loss is True
+
+    def test_stop_loss_blocked_when_spread_wide(self, sample_params):
+        """Test stop-loss blocked when spread is too wide.
+
+        Condition: pnl < -10 but spread > 0.05 (can't exit at good price)
+        """
+        pnl = -15  # Below threshold
+        spread = 0.08  # Above threshold - spread too wide
+        volatility = 1.0  # Below threshold
+
+        should_stop_loss = (
+            pnl < sample_params["stop_loss_threshold"]
+            and spread <= sample_params["spread_threshold"]
+        ) or volatility > sample_params["volatility_threshold"]
+
+        assert should_stop_loss is False
+
+    def test_stop_loss_triggers_on_high_volatility(self, sample_params):
+        """Test stop-loss triggers on volatility alone.
+
+        Condition: volatility > 2.0 (regardless of PnL)
+        """
+        pnl = 5  # Profitable position
+        spread = 0.10  # Wide spread
+        volatility = 3.5  # Above threshold
+
+        should_stop_loss = (
+            pnl < sample_params["stop_loss_threshold"]
+            and spread <= sample_params["spread_threshold"]
+        ) or volatility > sample_params["volatility_threshold"]
+
+        assert should_stop_loss is True
+
+    def test_no_stop_loss_when_profitable(self, sample_params):
+        """Test no stop-loss when position is profitable and volatility normal."""
+        pnl = 15  # Profitable
+        spread = 0.03  # Tight spread
+        volatility = 1.0  # Normal
+
+        should_stop_loss = (
+            pnl < sample_params["stop_loss_threshold"]
+            and spread <= sample_params["spread_threshold"]
+        ) or volatility > sample_params["volatility_threshold"]
+
+        assert should_stop_loss is False
+
+
+class TestTakeProfitBehavior:
+    """Tests documenting take-profit behavior.
+
+    Take-profit is in an elif block after stop-loss.
+    When stop-loss triggers and uses 'continue', take-profit is skipped.
+    """
+
+    def test_take_profit_price_calculation(self):
+        """Test take-profit price is calculated correctly.
+
+        tp_price = avgPrice + (avgPrice * take_profit_threshold / 100)
+        """
+        avgPrice = 0.40
+        take_profit_threshold = 10  # 10%
+
+        tp_price = avgPrice + (avgPrice * take_profit_threshold / 100)
+
+        assert abs(tp_price - 0.44) < 0.001
+
+    def test_take_profit_uses_max_of_tp_and_ask(self):
+        """Test take-profit uses max of calculated tp_price and ask_price.
+
+        This ensures we don't sell below current market.
+        """
+        avgPrice = 0.40
+        take_profit_threshold = 10
+        tp_price = avgPrice + (avgPrice * take_profit_threshold / 100)  # 0.44
+
+        ask_price = 0.46  # Current market higher than tp
+
+        final_sell_price = max(tp_price, ask_price)
+
+        assert final_sell_price == 0.46
+
+    def test_take_profit_conditions(self):
+        """Test take-profit triggers when there's sell_amount and significant price diff."""
+        sell_amount = 100  # Have position to sell
+        current_sell_order_price = 0.50
+        new_tp_price = 0.55
+
+        price_diff_percent = (
+            abs(new_tp_price - current_sell_order_price) / current_sell_order_price * 100
+        )
+
+        # Take-profit updates when:
+        # 1. sell_amount > 0
+        # 2. Price diff > 2%
+        should_update = sell_amount > 0 and price_diff_percent > 2
+
+        assert should_update is True

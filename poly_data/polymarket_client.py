@@ -277,6 +277,13 @@ class PolymarketClient:
             # Submit the signed order to the API
             resp = self.client.post_order(signed_order)
             get_rate_limit_manager().on_response(200)
+
+            # Invalidate balance cache after successful SELL order
+            # (balance will be lower after selling tokens)
+            if action == "SELL":
+                cache_key = f"{str(marketId)}_{neg_risk}"
+                _balance_cache.invalidate(cache_key)
+
             return resp
         except requests.exceptions.HTTPError as ex:
             # Extract status code and report to circuit breaker

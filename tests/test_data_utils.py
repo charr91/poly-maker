@@ -243,3 +243,127 @@ class TestSetOrderIntegration:
         orders = get_order(token)
         assert orders["buy"]["size"] == 0
         assert orders["sell"]["size"] == 300  # Sell should still be there
+
+
+class TestUpdatePositionsDivergenceLogging:
+    """Tests for position divergence logging in update_positions.
+
+    When the API returns a position size that differs significantly (>5%)
+    from the in-memory size, a WARNING should be logged to help debugging.
+    """
+
+    def setup_method(self):
+        """Reset global state before each test."""
+        global_state.positions = {}
+        global_state.performing = {}
+        global_state.last_trade_update = {}
+
+    def teardown_method(self):
+        """Clean up global state after each test."""
+        global_state.positions = {}
+        global_state.performing = {}
+        global_state.last_trade_update = {}
+
+    def test_logs_warning_on_significant_divergence(self, caplog):
+        """Test that WARNING is logged when divergence > 5%."""
+        import pandas as pd
+        from poly_data.data_utils import update_positions
+        import logging
+
+        # Set up in-memory position of 100
+        token = "test_token_123"
+        global_state.positions[token] = {"size": 100, "avgPrice": 0.45}
+
+        # Mock API returning 80 (20% difference)
+        mock_df = pd.DataFrame([{"asset": token, "size": 80, "avgPrice": 0.45}])
+
+        with patch.object(global_state, "client") as mock_client:
+            mock_client.get_all_positions.return_value = mock_df
+
+            with caplog.at_level(logging.WARNING):
+                update_positions(avgOnly=True)
+
+        # Check WARNING was logged
+        warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warning_messages) >= 1, "Expected WARNING log for significant divergence"
+        assert any("divergence" in msg.lower() for msg in warning_messages)
+        assert any("20.0% diff" in msg for msg in warning_messages)
+
+    def test_no_warning_on_small_divergence(self, caplog):
+        """Test that no WARNING is logged when divergence <= 5%."""
+        import pandas as pd
+        from poly_data.data_utils import update_positions
+        import logging
+
+        # Set up in-memory position of 100
+        token = "test_token_123"
+        global_state.positions[token] = {"size": 100, "avgPrice": 0.45}
+
+        # Mock API returning 98 (2% difference)
+        mock_df = pd.DataFrame([{"asset": token, "size": 98, "avgPrice": 0.45}])
+
+        with patch.object(global_state, "client") as mock_client:
+            mock_client.get_all_positions.return_value = mock_df
+
+            with caplog.at_level(logging.WARNING):
+                update_positions(avgOnly=True)
+
+        # Check no WARNING was logged
+        warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert (
+            len(warning_messages) == 0
+        ), f"No WARNING expected for small divergence, got: {warning_messages}"
+
+    def test_no_warning_when_old_size_zero(self, caplog):
+        """Test no division by zero when memory position is 0."""
+        import pandas as pd
+        from poly_data.data_utils import update_positions
+        import logging
+
+        # Set up in-memory position of 0
+        token = "test_token_123"
+        global_state.positions[token] = {"size": 0, "avgPrice": 0}
+
+        # Mock API returning 100 (new position)
+        mock_df = pd.DataFrame([{"asset": token, "size": 100, "avgPrice": 0.45}])
+
+        with patch.object(global_state, "client") as mock_client:
+            mock_client.get_all_positions.return_value = mock_df
+
+            # Should not raise ZeroDivisionError
+            update_positions(avgOnly=True)
+
+        # Position should be updated
+        assert global_state.positions[token]["size"] == 100
+
+    def test_divergence_calculation_correct(self):
+        """Test the divergence percentage calculation."""
+        old_size = 100
+        new_size = 75
+
+        divergence_pct = abs(old_size - new_size) / old_size * 100
+
+        assert divergence_pct == 25.0
+
+    def test_position_updated_despite_warning(self, caplog):
+        """Test that position is updated even when WARNING is logged."""
+        import pandas as pd
+        from poly_data.data_utils import update_positions
+        import logging
+
+        # Set up in-memory position of 100
+        token = "test_token_123"
+        global_state.positions[token] = {"size": 100, "avgPrice": 0.45}
+
+        # Mock API returning 50 (50% difference)
+        mock_df = pd.DataFrame([{"asset": token, "size": 50, "avgPrice": 0.40}])
+
+        with patch.object(global_state, "client") as mock_client:
+            mock_client.get_all_positions.return_value = mock_df
+
+            with caplog.at_level(logging.WARNING):
+                update_positions(avgOnly=True)
+
+        # Position should still be updated
+        assert global_state.positions[token]["size"] == 50
+        assert global_state.positions[token]["avgPrice"] == 0.40

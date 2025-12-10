@@ -50,6 +50,17 @@ def update_positions(avgOnly=False):
                             continue
 
                     if old_size != row["size"]:
+                        # Log significant divergence as WARNING for debugging
+                        if old_size > 0:
+                            divergence_pct = abs(old_size - row["size"]) / old_size * 100
+                            if divergence_pct > 5:
+                                logger.warning(
+                                    "Position divergence for %s: memory=%.2f, API=%.2f (%.1f%% diff)",
+                                    asset[:16],
+                                    old_size,
+                                    row["size"],
+                                    divergence_pct,
+                                )
                         logger.debug(
                             "Position update from API: %s -> %s (avgPrice: %s)",
                             old_size,
