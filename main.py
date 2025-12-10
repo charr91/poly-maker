@@ -5,6 +5,8 @@ import asyncio  # Asynchronous I/O
 import logging  # Logging
 import threading  # Thread management
 import random  # For jitter in retry logic
+import zoneinfo  # Timezone support
+from datetime import datetime  # Datetime handling
 from typing import Optional  # Type hints
 
 import requests.exceptions  # For type-based error detection
@@ -28,12 +30,38 @@ UPDATE_MAX_RETRIES = int(os.getenv("UPDATE_MAX_RETRIES", "3"))
 UPDATE_BASE_DELAY = float(os.getenv("UPDATE_BASE_DELAY", "5.0"))
 UPDATE_MAX_DELAY = float(os.getenv("UPDATE_MAX_DELAY", "60.0"))
 
-# Configure logging - level controllable via LOG_LEVEL env var (default: INFO)
+
+# Custom formatter for timezone-aware logs
+class TimezoneFormatter(logging.Formatter):
+    """Formatter that converts log timestamps to configured timezone."""
+
+    def __init__(self, fmt=None, datefmt=None, tz=None):
+        super().__init__(fmt, datefmt)
+        self.tz = tz
+
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, tz=self.tz)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+# Configure logging - level and timezone controllable via env vars
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_TIMEZONE = os.getenv("LOG_TIMEZONE", "America/Los_Angeles")
+
+handler = logging.StreamHandler()
+handler.setFormatter(
+    TimezoneFormatter(
+        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        tz=zoneinfo.ZoneInfo(LOG_TIMEZONE),
+    )
+)
+
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[handler],
 )
 logger = logging.getLogger("poly_maker")
 
